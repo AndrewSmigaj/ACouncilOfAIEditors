@@ -1,0 +1,334 @@
+/* 
+ * Main CSS for AI Council Guide Creation Website
+ * Following WCAG 2.1 accessibility guidelines
+ */
+
+/* Base styles and variables */
+:root {
+    --primary-color: #3498db;
+    --primary-dark: #2980b9;
+    --secondary-color: #2ecc71;
+    --secondary-dark: #27ae60;
+    --text-color: #333;
+    --light-text: #777;
+    --bg-color: #fff;
+    --light-bg: #f5f7fa;
+    --border-color: #ddd;
+    --error-color: #e74c3c;
+    --success-color: #2ecc71;
+    --focus-color: #3498db;
+    --spacing-sm: 0.5rem;
+    --spacing: 1rem;
+    --spacing-lg: 2rem;
+    --border-radius: 4px;
+    --box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Global reset and base styles */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    color: var(--text-color);
+    background-color: var(--bg-color);
+    line-height: 1.6;
+    font-size: 16px;
+}
+
+.container {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 var(--spacing);
+}
+
+/* Accessibility and focus styles */
+:focus {
+    outline: 3px solid var(--focus-color);
+    outline-offset: 2px;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+    margin-bottom: var(--spacing);
+    line-height: 1.3;
+}
+
+h1 {
+    font-size: 2.5rem;
+}
+
+h2 {
+    font-size: 2rem;
+}
+
+h3 {
+    font-size: 1.5rem;
+}
+
+p {
+    margin-bottom: var(--spacing);
+}
+
+a {
+    color: var(--primary-color);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+a:hover, a:focus {
+    color: var(--primary-dark);
+    text-decoration: underline;
+}
+
+/* Header styles */
+header {
+    background-color: var(--primary-color);
+    color: white;
+    padding: var(--spacing) 0;
+}
+
+header .container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    margin-bottom: 0;
+    font-size: 1.8rem;
+}
+
+nav ul {
+    list-style: none;
+    display: flex;
+}
+
+nav li {
+    margin-left: var(--spacing);
+}
+
+nav a {
+    color: white;
+    font-weight: 500;
+}
+
+nav a:hover, nav a:focus {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Main content styles */
+main {
+    padding: var(--spacing-lg) 0;
+}
+
+section {
+    margin-bottom: var(--spacing-lg);
+}
+
+.features {
+    display: flex;
+    flex-wrap: wrap;
+    margin: var(--spacing-lg) 0;
+    gap: var(--spacing);
+}
+
+.feature {
+    flex: 1;
+    min-width: 250px;
+    background-color: var(--light-bg);
+    padding: var(--spacing);
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+}
+
+.feature h3 {
+    color: var(--primary-color);
+    margin-bottom: var(--spacing-sm);
+}
+
+/* Form styles */
+.topic-form {
+    background-color: var(--light-bg);
+    padding: var(--spacing-lg);
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.form-description {
+    margin-bottom: var(--spacing-lg);
+    color: var(--light-text);
+}
+
+.input-group {
+    margin-bottom: var(--spacing);
+}
+
+.input-label {
+    display: block;
+    margin-bottom: var(--spacing-sm);
+    font-weight: 500;
+}
+
+.topic-input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    font-size: 1rem;
+}
+
+.button-group {
+    margin-top: var(--spacing-lg);
+}
+
+.submit-button {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: var(--border-radius);
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.submit-button:hover, .submit-button:focus {
+    background-color: var(--primary-dark);
+}
+
+.submit-button:disabled {
+    background-color: var(--light-text);
+    cursor: not-allowed;
+}
+
+/* Submit button with loading state */
+.submit-button.loading {
+    background-color: var(--primary-dark);
+    opacity: 0.8;
+}
+
+/* Loading spinner */
+.spinner {
+    display: inline-block;
+    margin-left: 1rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: white;
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.error-container {
+    color: var(--error-color);
+    margin-top: var(--spacing);
+    padding: var(--spacing-sm);
+    font-weight: 500;
+    display: none;
+}
+
+.examples-container {
+    margin-top: var(--spacing-lg);
+}
+
+.examples-list {
+    list-style: none;
+    margin-top: var(--spacing-sm);
+}
+
+.examples-list li {
+    margin-bottom: var(--spacing-sm);
+}
+
+.example-link {
+    color: var(--primary-color);
+    cursor: pointer;
+}
+
+.success-message {
+    background-color: var(--light-bg);
+    padding: var(--spacing-lg);
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.success-message h2 {
+    color: var(--success-color);
+    margin-bottom: var(--spacing);
+}
+
+/* Redirect progress bar */
+.redirect-progress-container {
+    height: 4px;
+    width: 100%;
+    background-color: var(--border-color);
+    margin-top: var(--spacing);
+    overflow: hidden;
+    border-radius: var(--border-radius);
+}
+
+.redirect-progress {
+    height: 100%;
+    background-color: var(--primary-color);
+    transition: width 0.1s linear;
+}
+
+/* Footer styles */
+footer {
+    background-color: var(--light-bg);
+    padding: var(--spacing) 0;
+    text-align: center;
+    color: var(--light-text);
+    margin-top: var(--spacing-lg);
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+    .features {
+        flex-direction: column;
+    }
+    
+    header .container {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    nav {
+        margin-top: var(--spacing);
+    }
+    
+    nav ul {
+        justify-content: center;
+    }
+    
+    nav li:first-child {
+        margin-left: 0;
+    }
+} 

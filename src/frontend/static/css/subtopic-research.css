@@ -1,0 +1,63 @@
+/* Subtopic Research Styles */
+
+/* Subtopic selection area */
+.subtopic-option {
+    transition: background-color 0.2s;
+    cursor: pointer;
+}
+
+.subtopic-option:hover {
+    background-color: #f8f9fa;
+}
+
+.subtopic-option .form-check-input {
+    cursor: pointer;
+}
+
+.subtopic-option label {
+    cursor: pointer;
+}
+
+.subtopic-rationale {
+    font-size: 0.9em;
+    margin-top: 5px;
+}
+
+/* Completed subtopics */
+.completed-subtopic {
+    background-color: #f8f9fa;
+}
+
+.completed-subtopic .badge {
+    font-size: 0.75rem;
+}
+
+.completed-subtopic .subtopic-summary {
+    font-size: 0.95em;
+    line-height: 1.4;
+    border-left: 3px solid #6c757d;
+    padding-left: 10px;
+    margin-top: 10px;
+}
+
+.view-subtopic-link {
+    color: #007bff;
+    text-decoration: none;
+}
+
+.view-subtopic-link:hover {
+    text-decoration: underline;
+}
+
+/* Progress indicators */
+.progress {
+    height: 10px;
+    border-radius: 5px;
+    margin: 10px 0 5px;
+    background-color: #e9ecef;
+}
+
+.progress-bar {
+    background-color: #28a745;
+    transition: width 0.5s ease;
+} 

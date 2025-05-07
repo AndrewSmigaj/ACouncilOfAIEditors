@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Topic Form Test</title>
+    <!-- D3.js (v7) -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        /* Base styles and variables */
+        :root {
+            --primary-color: #3498db;
+            --primary-dark: #2980b9;
+            --secondary-color: #2ecc71;
+            --secondary-dark: #27ae60;
+            --text-color: #333;
+            --light-text: #777;
+            --bg-color: #fff;
+            --light-bg: #f5f7fa;
+            --border-color: #ddd;
+            --error-color: #e74c3c;
+            --success-color: #2ecc71;
+            --focus-color: #3498db;
+            --spacing-sm: 0.5rem;
+            --spacing: 1rem;
+            --spacing-lg: 2rem;
+            --border-radius: 4px;
+            --box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Global reset and base styles */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+            line-height: 1.6;
+            font-size: 16px;
+            padding: 2rem;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            margin-bottom: var(--spacing);
+            line-height: 1.3;
+        }
+
+        p {
+            margin-bottom: var(--spacing);
+        }
+
+        /* Test controls */
+        .test-controls {
+            margin: 2rem 0;
+            padding: 1rem;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+        }
+        .test-controls button {
+            margin-right: 0.5rem;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+        }
+
+        /* Form styles */
+        .topic-form {
+            background-color: var(--light-bg);
+            padding: var(--spacing-lg);
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .form-description {
+            margin-bottom: var(--spacing-lg);
+            color: var(--light-text);
+        }
+
+        .input-group {
+            margin-bottom: var(--spacing);
+        }
+
+        .input-label {
+            display: block;
+            margin-bottom: var(--spacing-sm);
+            font-weight: 500;
+        }
+
+        .topic-input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            font-size: 1rem;
+        }
+
+        .button-group {
+            margin-top: var(--spacing-lg);
+        }
+
+        .submit-button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: var(--border-radius);
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+
+        .submit-button:hover, .submit-button:focus {
+            background-color: var(--primary-dark);
+        }
+
+        .submit-button:disabled {
+            background-color: var(--light-text);
+            cursor: not-allowed;
+        }
+
+        /* Submit button with loading state */
+        .submit-button.loading {
+            background-color: var(--primary-dark);
+            opacity: 0.8;
+        }
+
+        /* Loading spinner */
+        .spinner {
+            display: inline-block;
+            margin-left: 1rem;
+            width: 1.5rem;
+            height: 1.5rem;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .error-container {
+            color: var(--error-color);
+            margin-top: var(--spacing);
+            padding: var(--spacing-sm);
+            font-weight: 500;
+            display: none;
+        }
+
+        .examples-container {
+            margin-top: var(--spacing-lg);
+        }
+
+        .examples-list {
+            list-style: none;
+            margin-top: var(--spacing-sm);
+        }
+
+        .examples-list li {
+            margin-bottom: var(--spacing-sm);
+        }
+
+        .example-link {
+            color: var(--primary-color);
+            cursor: pointer;
+        }
+
+        .success-message {
+            background-color: var(--light-bg);
+            padding: var(--spacing-lg);
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            max-width: 800px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .success-message h2 {
+            color: var(--success-color);
+            margin-bottom: var(--spacing);
+        }
+
+        /* Redirect progress bar */
+        .redirect-progress-container {
+            height: 4px;
+            width: 100%;
+            background-color: var(--border-color);
+            margin-top: var(--spacing);
+            overflow: hidden;
+            border-radius: var(--border-radius);
+        }
+
+        .redirect-progress {
+            height: 100%;
+            background-color: var(--primary-color);
+            transition: width 0.1s linear;
+        }
+
+        /* Redirect info */
+        .redirect-info {
+            margin-top: 2rem;
+            padding: 1rem;
+            background-color: #f0f8ff;
+            border: 1px solid #b0e0e6;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Topic Form Test</h1>
+    
+    <div class="test-controls">
+        <h2>Test Controls</h2>
+        <p>Select API response behavior:</p>
+        <button id="success-test">Test Success Response</button>
+        <button id="error-test">Test Error Response</button>
+        <button id="network-error-test">Test Network Error</button>
+    </div>
+    
+    <div id="topic-form-container"></div>
+    
+    <script>
+    // Modified showSuccessAndRedirect function that doesn't try to redirect
+    function showSuccessAndRedirect(container, topic, guideId) {
+        // Hide the form
+        container.select('.topic-form').style('display', 'none');
+        
+        // Show success message
+        const successMessage = container.append('div')
+            .attr('class', 'success-message')
+            .attr('role', 'alert')
+            .attr('aria-live', 'assertive');
+            
+        successMessage.append('h2')
+            .text('Topic Submitted Successfully!');
+            
+        successMessage.append('p')
+            .html(`Your guide on "<strong>${topic}</strong>" is being researched.`);
+            
+        successMessage.append('p')
+            .text('You will be redirected to the research approval page shortly.');
+            
+        // Add a progress indicator
+        const progressContainer = successMessage.append('div')
+            .attr('class', 'redirect-progress-container');
+            
+        const progress = progressContainer.append('div')
+            .attr('class', 'redirect-progress')
+            .style('width', '0%');
+            
+        // Animate progress bar
+        const duration = 3000; // 3 seconds until redirect
+        const startTime = Date.now();
+        
+        const updateProgress = function() {
+            const elapsed = Date.now() - startTime;
+            const percentage = Math.min(100, (elapsed / duration) * 100);
+            
+            progress.style('width', `${percentage}%`);
+            
+            if (percentage < 100) {
+                requestAnimationFrame(updateProgress);
+            } else {
+                // Instead of redirecting, show where we would redirect
+                const redirectUrl = `/guide/${guideId}/research`;
+                console.log(`Would redirect to: ${redirectUrl}`);
+                
+                // Display redirect info
+                const redirectInfo = document.createElement('div');
+                redirectInfo.className = 'redirect-info';
+                redirectInfo.innerHTML = `<p>Would redirect to: ${redirectUrl}</p>`;
+                document.body.appendChild(redirectInfo);
+            }
+        };
+        
+        // Start progress animation
+        requestAnimationFrame(updateProgress);
+    }
+
+    /**
+     * Validates topic input
+     */
+    function validateInput(topic) {
+        // Check if topic is empty
+        if (!topic || topic.trim() === '') {
+            return { 
+                valid: false, 
+                error: 'Topic cannot be empty' 
+            };
+        }
+        
+        // Check if topic is too vague (less than 3 words)
+        const words = topic.trim().split(/\s+/);
+        if (words.length < 3) {
+            return { 
+                valid: false, 
+                error: 'Topic too vague. Please provide at least 3 words.' 
+            };
+        }
+        
+        // Topic is valid
+        return { valid: true };
+    }
+
+    /**
+     * Displays feedback for topic input
+     */
+    function displayFeedback(containerId, validation) {
+        const container = d3.select(`#${containerId}`);
+        const errorContainer = container.select('.error-container');
+        
+        if (!validation.valid) {
+            // Show error message
+            errorContainer
+                .style('display', 'block')
+                .text(validation.error);
+        } else {
+            // Hide error message
+            errorContainer.style('display', 'none');
+        }
+    }
+
+    /**
+     * Updates the UI to show or hide loading state
+     */
+    function updateLoadingState(elements, isLoading) {
+        if (isLoading) {
+            elements.button
+                .text('Processing...')
+                .attr('disabled', true)
+                .classed('loading', true);
+                
+            // Add a loading spinner if needed
+            if (!elements.spinner) {
+                elements.spinner = elements.buttonGroup.append('div')
+                    .attr('class', 'spinner')
+                    .attr('aria-hidden', 'true');
+            }
+        } else {
+            elements.button
+                .text('Start Guide Creation')
+                .attr('disabled', null)
+                .classed('loading', false);
+                
+            // Remove spinner if exists
+            if (elements.spinner) {
+                elements.spinner.remove();
+                elements.spinner = null;
+            }
+        }
+    }
+
+    /**
+     * Displays an error message from API or network failure
+     */
+    function displayAPIError(errorContainer, error) {
+        let errorMessage = 'An unexpected error occurred. Please try again.';
+        
+        if (typeof error === 'string') {
+            errorMessage = error;
+        } else if (error && error.error) {
+            errorMessage = error.error;
+        } else if (error && error.message) {
+            errorMessage = error.message;
+        }
+        
+        errorContainer
+            .style('display', 'block')
+            .text(errorMessage);
+    }
+
+    /**
+     * Creates a topic input form with a text input and submit button
+     */
+    function createTopicForm(containerId, apiEndpoint) {
+        // Select the container element
+        const container = d3.select(`#${containerId}`);
+        
+        // Create form element
+        const form = container.append('form')
+            .attr('class', 'topic-form')
+            .attr('aria-label', 'Topic input form');
+        
+        // Create form header
+        form.append('h2')
+            .text('Enter Your Guide Topic');
+        
+        // Create form description
+        form.append('p')
+            .attr('class', 'form-description')
+            .text('Provide a specific topic for your guide (at least 3 words)');
+        
+        // Create topic input field
+        const inputGroup = form.append('div')
+            .attr('class', 'input-group');
+        
+        inputGroup.append('label')
+            .attr('for', 'topic-input')
+            .attr('class', 'input-label')
+            .text('Guide Topic:');
+        
+        inputGroup.append('input')
+            .attr('type', 'text')
+            .attr('id', 'topic-input')
+            .attr('name', 'topic')
+            .attr('class', 'topic-input')
+            .attr('placeholder', 'e.g., How to start a podcast')
+            .attr('aria-required', 'true')
+            .attr('required', true);
+        
+        // Create submit button
+        const buttonGroup = form.append('div')
+            .attr('class', 'button-group');
+        
+        buttonGroup.append('button')
+            .attr('type', 'submit')
+            .attr('class', 'submit-button')
+            .text('Start Guide Creation');
+        
+        // Create error message container
+        const errorContainer = form.append('div')
+            .attr('class', 'error-container')
+            .attr('aria-live', 'polite')
+            .style('display', 'none');
+        
+        // Create examples container
+        const examplesContainer = form.append('div')
+            .attr('class', 'examples-container');
+        
+        examplesContainer.append('h3')
+            .text('Example Topics:');
+        
+        const examplesList = examplesContainer.append('ul')
+            .attr('class', 'examples-list');
+        
+        // Add example topics
+        const examples = [
+            'How to start a podcast',
+            'Building a sustainable garden',
+            'Advanced techniques for digital photography',
+            'Creating a personal financial plan'
+        ];
+        
+        examples.forEach(example => {
+            examplesList.append('li')
+                .append('a')
+                .attr('href', '#')
+                .attr('class', 'example-link')
+                .text(example)
+                .on('click', function(event) {
+                    event.preventDefault();
+                    d3.select('#topic-input').property('value', example);
+                });
+        });
+        
+        // Add form submission handler
+        form.on('submit', function(event) {
+            event.preventDefault();
+            
+            // Get input value
+            const topic = d3.select('#topic-input').property('value').trim();
+            
+            // Validate input
+            const validation = validateInput(topic);
+            if (!validation.valid) {
+                displayFeedback(containerId, validation);
+                return;
+            }
+            
+            // Clear any previous errors
+            errorContainer.style('display', 'none');
+            
+            // UI elements for loading state
+            const elements = {
+                form: form,
+                button: buttonGroup.select('button'),
+                buttonGroup: buttonGroup,
+                spinner: null
+            };
+            
+            // Show loading state
+            updateLoadingState(elements, true);
+            
+            // Submit to API (using our mock fetch)
+            mockFetch(apiEndpoint, topic)
+                .then(response => {
+                    // Handle successful response
+                    updateLoadingState(elements, false);
+                    
+                    // Show success message and redirect simulation
+                    showSuccessAndRedirect(container, topic, response.guide_id);
+                })
+                .catch(error => {
+                    // Handle error
+                    updateLoadingState(elements, false);
+                    displayAPIError(errorContainer, error);
+                });
+        });
+        
+        return form;
+    }
+
+    // Mock API responses
+    const mockSuccessResponse = {
+        guide_id: "test_guide_123",
+        topic: "Test Topic",
+        status: "paused_research",
+        message: "Research initiated and paused for approval"
+    };
+    
+    const mockErrorResponse = {
+        error: "Invalid topic format. Please try again."
+    };
+    
+    // Create mock fetch behavior variable
+    let mockFetchBehavior = 'success';
+    
+    // Mock fetch function that doesn't override global fetch
+    function mockFetch(url, topic) {
+        return new Promise((resolve, reject) => {
+            setTimeout(() => {
+                if (mockFetchBehavior === 'success') {
+                    // Clone the success response and update topic
+                    const response = {...mockSuccessResponse, topic: topic};
+                    resolve(response);
+                } else if (mockFetchBehavior === 'error') {
+                    reject(mockErrorResponse);
+                } else if (mockFetchBehavior === 'network-error') {
+                    reject(new Error('Network error'));
+                }
+            }, 1500); // Simulate network delay
+        });
+    }
+
+    // Test control buttons
+    document.getElementById('success-test').addEventListener('click', () => {
+        mockFetchBehavior = 'success';
+        resetForm();
+    });
+    
+    document.getElementById('error-test').addEventListener('click', () => {
+        mockFetchBehavior = 'error';
+        resetForm();
+    });
+    
+    document.getElementById('network-error-test').addEventListener('click', () => {
+        mockFetchBehavior = 'network-error';
+        resetForm();
+    });
+    
+    function resetForm() {
+        // Clear any previous redirect info
+        document.querySelectorAll('.redirect-info').forEach(el => el.remove());
+        
+        // Reset form container and recreate form
+        document.getElementById('topic-form-container').innerHTML = '';
+        createTopicForm('topic-form-container', '/api/research');
+    }
+    
+    // Initialize when DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+        createTopicForm('topic-form-container', '/api/research');
+    });
+    </script>
+</body>
+</html> 

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Council Guide Creation</title>
+    <!-- D3.js (v7) -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <!-- Ensure accessibility -->
+    <meta name="description" content="Create comprehensive guides with AI assistance">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>AI Council Guide Creation</h1>
+            <nav>
+                <ul>
+                    <li><a href="/" aria-current="page">Home</a></li>
+                    <li><a href="/guides">My Guides</a></li>
+                    <li><a href="/account">Account</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <div class="container">
+            <section id="intro">
+                <h2>Create Comprehensive Guides with AI Assistance</h2>
+                <p>
+                    Collaborate with an AI council (Claude, ChatGPT, Gemini) to create
+                    in-depth guides on any topic. Our multi-step process ensures quality
+                    through research, outlines, drafting, editing, and review.
+                </p>
+                <div class="features">
+                    <div class="feature">
+                        <h3>Pause & Approve</h3>
+                        <p>Review AI work at each step before proceeding</p>
+                    </div>
+                    <div class="feature">
+                        <h3>AI Transparency</h3>
+                        <p>See all AI queries, responses, and token costs</p>
+                    </div>
+                    <div class="feature">
+                        <h3>Creative Passes</h3>
+                        <p>Trigger creative ideas with random word inspiration</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="topic-form-container">
+                <!-- D3.js will inject the topic form here -->
+            </section>
+
+            <section id="guide-dashboard" style="display: none;">
+                <!-- D3.js will inject the guide dashboard here -->
+            </section>
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 AI Council Guide Creation</p>
+        </div>
+    </footer>
+
+    <!-- Custom JavaScript -->
+    <script src="{{ url_for('static', filename='js/topicInput.js') }}"></script>
+    <script>
+        // Initialize topic form when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            // Create topic form
+            createTopicForm('topic-form-container', '/api/research');
+        });
+    </script>
+</body>
+</html> 
