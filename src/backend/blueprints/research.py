@@ -1,596 +1,701 @@
 """
 Research Blueprint for AI Council Guide Creation Website
 """
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request, current_app, render_template
 from bson.objectid import ObjectId
 import json
 import re
 import asyncio
 from datetime import datetime
+from typing import Dict, Any, Optional
+import logging
 
-# Import the research orchestrator
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+# Import the research chain
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
-from src.langchain.chains.research_chain import research_topic, ResearchOrchestrator
+from src.langchain.chains.research_services import ResearchService
 from src.database.mongodb import get_database
+from ..models.research import ResearchTopic
+from ...langchain.chains.research_base import ResearchResult, ResearchError
 
 # Create blueprint
 research_bp = Blueprint('research', __name__)
 
+@research_bp.errorhandler(Exception)
+def handle_error(error):
+    """Global error handler for the research blueprint"""
+    logger.error(f"Research error: {str(error)}", exc_info=True)
+    return jsonify({
+        "status": "error",
+        "message": str(error)
+    }), 500
+
 @research_bp.route('/', methods=['POST'])
-def start_research():
+async def start_research():
     """
     Start the research process for a given topic
     Uses LangChain orchestration with Google Search and Grok DeepSearch
     """
-    # Get request data
-    data = request.get_json()
-    
-    if not data or 'topic' not in data:
-        return jsonify({"error": "Topic is required"}), 400
-    
-    topic = data['topic']
-    
-    # Enhanced validation
-    validation_error = validate_topic(topic)
-    if validation_error:
-        return jsonify({"error": validation_error}), 400
-    
+    logger.debug("Starting research process")
     try:
+        # Get request data
+        data = request.get_json()
+        logger.debug(f"Received request data: {data}")
+        
+        if not data or 'topic' not in data:
+            logger.error("No topic provided in request")
+            return jsonify({
+                "status": "error",
+                "message": "Topic is required"
+            }), 400
+        
+        topic = data['topic']
+        parent_id = data.get('parent_id')
+        logger.debug(f"Processing topic: {topic}, parent_id: {parent_id}")
+        
+        # Enhanced validation
+        validation_error = validate_topic(topic)
+        if validation_error:
+            logger.error(f"Topic validation failed: {validation_error}")
+            return jsonify({
+                "status": "error",
+                "message": validation_error
+            }), 400
+        
         # Create a new guide document with initial status
         db = get_database()
         guide = {
             "topic": topic,
+            "parent_id": parent_id,
             "status": "initializing",
             "metadata": {
                 "created": datetime.utcnow(),
                 "updated": datetime.utcnow(),
-                "ais": ["Claude", "ChatGPT", "Gemini", "Grok"]
+                "ais": ["Claude", "ChatGPT", "Gemini", "Grok"],
+                "depth": 0 if not parent_id else get_topic_depth(db, parent_id) + 1
             },
             "ai_interactions": []
         }
         
+        logger.debug(f"Creating new guide document: {json.dumps(guide, default=str)}")
         result = db.guides.insert_one(guide)
         guide_id = str(result.inserted_id)
+        logger.debug(f"Created guide with ID: {guide_id}")
         
-        # Start the research process asynchronously
-        # We'll use a background task for this in production
-        # For now, we'll block the request until it's done for testing purposes
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            research_result = loop.run_until_complete(research_topic(topic, guide_id))
-        finally:
-            loop.close()
+        # Initialize research service
+        research_service = ResearchService(ResearchConfig.from_config())
         
-        # Return the guide ID and status
-        return jsonify({
-            "guide_id": guide_id,
-            "topic": topic,
-            "status": "paused_research",
-            "message": "Research completed and paused for approval"
-        }), 201
+        # Run research
+        logger.debug(f"Starting research for guide_id: {guide_id}")
+        research = await research_service.research_topic(topic, guide_id)
+        logger.debug(f"Research completed for guide_id: {guide_id}")
         
-    except Exception as e:
-        # Log the error
-        current_app.logger.error(f"Research error: {str(e)}")
-        
-        # Return error response
-        return jsonify({
-            "error": "An error occurred during research",
-            "details": str(e)
-        }), 500
-
-def validate_topic(topic):
-    """
-    Validates a topic with enhanced validation rules
-    Returns None if valid, or error message if invalid
-    """
-    # Check if topic is empty or only whitespace
-    if not topic or topic.strip() == '':
-        return "Topic cannot be empty"
-    
-    trimmed_topic = topic.strip()
-    words = trimmed_topic.split()
-    
-    # Check if topic is too vague (less than 3 words)
-    if len(words) < 3:
-        return "Topic too vague, please provide at least 3 words"
-    
-    # Check if topic is too long (more than 100 characters)
-    if len(trimmed_topic) > 100:
-        return "Topic too long. Please limit to 100 characters"
-    
-    # Check if topic contains invalid characters
-    valid_chars_regex = r'^[a-zA-Z0-9\s.,?!\'"():-]+$'
-    if not re.match(valid_chars_regex, trimmed_topic):
-        return "Topic contains invalid characters. Please use only letters, numbers, and basic punctuation"
-    
-    # Check if topic has at least 10 characters total
-    if len(trimmed_topic) < 10:
-        return "Topic too short. Please be more specific (at least 10 characters)"
-    
-    # Check if any word is excessively long
-    max_word_length = 30
-    for word in words:
-        if len(word) > max_word_length:
-            return f"Word '{word[:10]}...' is too long. Please use natural language"
-    
-    # Topic is valid
-    return None
-
-@research_bp.route('/<guide_id>', methods=['GET'])
-def get_research_results(guide_id):
-    """
-    Get the current research results for a guide
-    """
-    try:
-        db = get_database()
-        guide = db.guides.find_one({"_id": ObjectId(guide_id)})
-        
-        if not guide:
-            return jsonify({"error": "Guide not found"}), 404
-        
-        # Extract research data
-        research_data = guide.get("research", {})
-        status = guide.get("status", "unknown")
-        
-        # Get the AI interactions related to research
-        research_interactions = []
-        for interaction in guide.get("ai_interactions", []):
-            if interaction.get("step") in ["search", "deepsearch"]:
-                # Limit the size of the response for API interactions
-                if len(interaction.get("response", "")) > 1000:
-                    interaction["response"] = interaction["response"][:1000] + "... [truncated]"
-                research_interactions.append(interaction)
-        
-        return jsonify({
-            "guide_id": guide_id,
-            "topic": guide.get("topic", ""),
-            "status": status,
-            "research": research_data,
-            "interactions": research_interactions,
-        }), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@research_bp.route('/<guide_id>/approve', methods=['POST'])
-def approve_research(guide_id):
-    """
-    Approve research results and move to outline stage
-    """
-    try:
-        db = get_database()
-        guide = db.guides.find_one({"_id": ObjectId(guide_id)})
-        
-        if not guide:
-            return jsonify({"error": "Guide not found"}), 404
-        
-        # Check if the guide is in the correct state
-        if guide.get("status") != "paused_research":
-            return jsonify({
-                "error": f"Guide is not in paused_research state, current state: {guide.get('status')}"
-            }), 400
-        
-        # Update the guide status
+        # Update guide with research results
+        logger.debug(f"Updating guide {guide_id} with research results")
         db.guides.update_one(
             {"_id": ObjectId(guide_id)},
             {
                 "$set": {
-                    "status": "paused_outline",
+                    "status": "completed",
+                    "research": research.to_dict(),
+                    "metadata.updated": datetime.utcnow()
+                }
+            }
+        )
+        logger.debug(f"Guide {guide_id} updated successfully")
+        
+        return jsonify({
+            "status": "success",
+            "guide_id": guide_id,
+            "research": research.to_dict()
+        })
+        
+    except Exception as e:
+        logger.error(f"Research failed: {str(e)}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@research_bp.route('/research', methods=['POST'])
+async def initialize_research_document():
+    """Initialize a new research document"""
+    try:
+        data = request.get_json()
+        topic = data.get('topic')
+        guide_id = data.get('guide_id')
+        parent_id = data.get('parent_id')
+        
+        if not topic:
+            return jsonify({
+                'status': 'error',
+                'message': 'Topic is required'
+            }), 400
+            
+        # Create research chain
+        research_chain = await create_research_chain()
+        
+        # Run research
+        research_results = await research_chain.run(topic, "")
+        
+        # Create research result
+        research = ResearchResult(
+            summary=research_results["summary"],
+            key_points=research_results["key_points"],
+            entities=research_results["entities"],
+            subtopics=research_results["subtopics"],
+            timeline=research_results["timeline"],
+            further_research=research_results["further_research"],
+            references=research_results["references"],
+            web_results=research_results.get("web_results", [])
+        )
+        
+        # Update parent if exists
+        if parent_id:
+            db = get_database()
+            db.guides.update_one(
+                {"_id": ObjectId(parent_id)},
+                {"$push": {"children": guide_id}}
+            )
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Research completed successfully',
+            'research': research.to_dict()
+        })
+            
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@research_bp.route('/research/subtopic', methods=['POST'])
+async def research_subtopic():
+    """Research a subtopic"""
+    try:
+        data = request.get_json()
+        topic = data.get('topic')
+        parent_topic = data.get('parent_topic')
+        guide_id = data.get('guide_id')
+        
+        if not topic or not parent_topic:
+            return jsonify({
+                'status': 'error',
+                'message': 'Topic and parent topic are required'
+            }), 400
+            
+        # Create research chain
+        research_chain = await create_research_chain()
+        
+        # Run research
+        research_results = await research_chain.run(topic, "")
+        
+        # Create research result
+        research = ResearchResult(
+            summary=research_results["summary"],
+            key_points=research_results["key_points"],
+            entities=research_results["entities"],
+            subtopics=research_results["subtopics"],
+            timeline=research_results["timeline"],
+            further_research=research_results["further_research"],
+            references=research_results["references"],
+            web_results=research_results.get("web_results", [])
+        )
+        
+        # Update parent-child relationship
+        db = get_database()
+        parent_guide = db.guides.find_one({"topic": parent_topic})
+        if parent_guide:
+            db.guides.update_one(
+                {"_id": parent_guide["_id"]},
+                {"$push": {"children": guide_id}}
+            )
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Subtopic research completed successfully',
+            'research': research.to_dict()
+        })
+            
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@research_bp.route('/results/<guide_id>', methods=['GET'])
+async def get_research_results(guide_id: str):
+    """Get research results for a guide"""
+    logger.debug(f"Getting research results for guide: {guide_id}")
+    try:
+        db = get_database()
+        guide = db.guides.find_one({"_id": ObjectId(guide_id)})
+        
+        if not guide:
+            logger.error(f"Guide not found: {guide_id}")
+            return jsonify({
+                'status': 'error',
+                'message': 'No research results found'
+            }), 404
+            
+        logger.debug(f"Found guide: {guide}")
+            
+        # Get children if any
+        children = []
+        if guide.get('children'):
+            logger.debug(f"Getting children for guide: {guide_id}")
+            children = list(db.guides.find(
+                {"_id": {"$in": [ObjectId(child_id) for child_id in guide['children']]}},
+                {"topic": 1, "status": 1, "research_results": 1}
+            ))
+            # Convert ObjectId to string in children
+            for child in children:
+                child['_id'] = str(child['_id'])
+                child['guide_id'] = str(child['_id'])
+            logger.debug(f"Found {len(children)} children")
+            
+        # Format the response
+        response = {
+            'status': 'success',
+            'research': {
+                '_id': str(guide['_id']),
+                'guide_id': str(guide['_id']),
+                'topic': guide['topic'],
+                'status': guide['status'],
+                'research_results': guide.get('research_results', {}),
+                'children': children,
+                'metadata': guide.get('metadata', {})
+            }
+        }
+        
+        # If there are no research results but the guide exists, return empty results
+        if not response['research']['research_results']:
+            logger.debug("No research results found, returning empty results")
+            response['research']['research_results'] = {
+                'summary': '',
+                'key_points': [],
+                'entities': [],
+                'subtopics': [],
+                'timeline': [],
+                'further_research': [],
+                'references': [],
+                'web_results': []
+            }
+            
+        logger.debug("Returning research results")
+        return jsonify(response)
+            
+    except Exception as e:
+        logger.error(f"Error getting research results: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@research_bp.route('/topics/<topic_id>/research', methods=['POST'])
+def start_topic_research(topic_id):
+    try:
+        db = get_database()
+        topic = db.research_topics.find_one({"_id": ObjectId(topic_id)})
+        
+        if not topic:
+            return jsonify({"error": "Topic not found"}), 404
+            
+        # Update status to in_progress
+        db.research_topics.update_one(
+            {"_id": ObjectId(topic_id)},
+            {
+                "$set": {
+                    "status": "in_progress",
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        # Start research in background
+        asyncio.create_task(run_topic_research(topic_id))
+        
+        return jsonify({
+            "message": "Research started",
+            "topic_id": topic_id
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"Error starting research: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+def validate_topic(topic: str) -> Optional[str]:
+    """Validate the research topic"""
+    if not topic or not isinstance(topic, str):
+        return "Topic must be a non-empty string"
+    if len(topic) < 3:
+        return "Topic must be at least 3 characters long"
+    if len(topic) > 500:
+        return "Topic must be less than 500 characters"
+    if not re.match(r'^[a-zA-Z0-9\s\-_.,!?()]+$', topic):
+        return "Topic contains invalid characters"
+    return None
+
+def get_topic_depth(db, parent_id: str) -> int:
+    """Get the depth of a topic in the research tree"""
+    try:
+        parent = db.guides.find_one({"_id": ObjectId(parent_id)})
+        if not parent:
+            return 0
+        return parent.get("metadata", {}).get("depth", 0)
+    except Exception:
+        return 0
+
+async def run_topic_research(topic_id: str):
+    """Run research for a topic in the background"""
+    try:
+        db = get_database()
+        topic = db.research_topics.find_one({"_id": ObjectId(topic_id)})
+        
+        if not topic:
+            return
+            
+        # Create research chain
+        research_chain = await create_research_chain()
+        
+        # Run research
+        research_results = await research_chain.run(topic['topic'], "")
+        
+        # Create research result
+        research = ResearchResult(
+            summary=research_results["summary"],
+            key_points=research_results["key_points"],
+            entities=research_results["entities"],
+            subtopics=research_results["subtopics"],
+            timeline=research_results["timeline"],
+            further_research=research_results["further_research"],
+            references=research_results["references"],
+            web_results=research_results.get("web_results", [])
+        )
+        
+        # Update topic with results
+        db.research_topics.update_one(
+            {"_id": ObjectId(topic_id)},
+            {
+                "$set": {
+                    "status": "completed",
+                    "research_results": research.to_dict(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+    except Exception as e:
+        current_app.logger.error(f"Error in background research: {str(e)}")
+        db.research_topics.update_one(
+            {"_id": ObjectId(topic_id)},
+            {
+                "$set": {
+                    "status": "error",
+                    "error_message": str(e),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+
+@research_bp.route('/topics', methods=['POST'])
+def add_topic():
+    try:
+        data = request.get_json()
+        topic = data.get('topic')
+        parent_id = data.get('parent_id')
+        is_user_added = data.get('is_user_added', False)
+        
+        if not topic:
+            return jsonify({"error": "Topic is required"}), 400
+            
+        db = get_database()
+        
+        # Get parent topic context if parent_id exists
+        context = None
+        if parent_id:
+            parent = db.research_topics.find_one({"_id": ObjectId(parent_id)})
+            if parent:
+                context = parent.get('topic')
+        
+        # Create new topic
+        new_topic = ResearchTopic(
+            topic=topic,
+            parent_id=parent_id,
+            is_user_added=is_user_added,
+            context=context
+        )
+        
+        result = db.research_topics.insert_one(new_topic.to_dict())
+        
+        return jsonify({
+            "message": "Topic added successfully",
+            "topic_id": str(result.inserted_id)
+        }), 201
+        
+    except Exception as e:
+        current_app.logger.error(f"Error adding topic: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@research_bp.route('/topics/<topic_id>', methods=['GET'])
+def get_topic(topic_id):
+    try:
+        db = get_database()
+        topic = db.research_topics.find_one({"_id": ObjectId(topic_id)})
+        
+        if not topic:
+            return jsonify({"error": "Topic not found"}), 404
+            
+        return jsonify(topic), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"Error getting topic: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@research_bp.route('/topics/tree', methods=['GET'])
+def get_topic_tree():
+    try:
+        db = get_database()
+        
+        # Get all topics
+        topics = list(db.research_topics.find())
+        
+        # Convert to tree structure
+        def build_tree(topics, parent_id=None):
+            tree = []
+            for topic in topics:
+                if topic.get('parent_id') == parent_id:
+                    node = {
+                        'id': str(topic['_id']),
+                        'name': topic['topic'],
+                        'isUserAdded': topic.get('is_user_added', False),
+                        'status': topic.get('status', 'pending'),
+                        'children': build_tree(topics, str(topic['_id']))
+                    }
+                    tree.append(node)
+            return tree
+        
+        tree = build_tree(topics)
+        
+        return jsonify(tree), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"Error getting topic tree: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@research_bp.route('/<guide_id>/subtopics', methods=['POST'])
+async def research_subtopics(guide_id: str):
+    """Research a single subtopic"""
+    try:
+        data = request.get_json()
+        topic_data = data.get('topic')
+        
+        # Handle both string and object topic formats
+        if isinstance(topic_data, dict):
+            topic = topic_data.get('topic')
+        else:
+            topic = topic_data
+            
+        if not topic:
+            return jsonify({
+                'status': 'error',
+                'message': 'Topic is required'
+            }), 400
+            
+        # Create research chain
+        research_chain = await create_research_chain()
+        
+        # Run research
+        research_results = await research_chain.run(topic, "")
+        
+        # Create research result
+        research = ResearchResult(
+            summary=research_results["summary"],
+            key_points=research_results["key_points"],
+            entities=research_results["entities"],
+            subtopics=research_results["subtopics"],
+            timeline=research_results["timeline"],
+            further_research=research_results["further_research"],
+            references=research_results["references"],
+            web_results=research_results.get("web_results", [])
+        )
+        
+        # Create a new guide document for this subtopic
+        db = get_database()
+        subtopic_guide = {
+            "topic": topic,
+            "parent_id": guide_id,  # Link to parent guide
+            "status": "initializing",
+            "metadata": {
+                "created": datetime.utcnow(),
+                "updated": datetime.utcnow(),
+                "ais": ["Claude", "ChatGPT", "Gemini", "Grok"],
+                "depth": get_topic_depth(db, guide_id) + 1
+            },
+            "ai_interactions": []
+        }
+        
+        result = db.guides.insert_one(subtopic_guide)
+        subtopic_guide_id = str(result.inserted_id)
+        
+        # Update parent guide with child reference
+        db.guides.update_one(
+            {"_id": ObjectId(guide_id)},
+            {"$push": {"children": subtopic_guide_id}}
+        )
+        
+        # Update guide with research results
+        db.guides.update_one(
+            {"_id": ObjectId(subtopic_guide_id)},
+            {
+                "$set": {
+                    "status": "completed",
+                    "research_results": research.to_dict(),
                     "metadata.updated": datetime.utcnow()
                 }
             }
         )
         
-        # In a future task, we would trigger the outline creation process here
-        # For now, we'll just update the status
-        
+        # Return the guide ID and status
         return jsonify({
-            "guide_id": guide_id,
-            "status": "paused_outline",
-            "message": "Research approved, moving to outline creation"
-        }), 200
-        
+            "status": "success",
+            "guide_id": subtopic_guide_id,
+            "topic": topic,
+            "status": "completed",
+            "message": "Research completed successfully",
+            "research": research.to_dict()
+        }), 201
+            
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        current_app.logger.error(f"Research error: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
-@research_bp.route('/<guide_id>/feedback', methods=['POST'])
-def add_feedback(guide_id):
-    """
-    Add feedback for research results
-    """
-    data = request.get_json()
-    
-    if not data or 'feedback' not in data:
-        return jsonify({"error": "Feedback is required"}), 400
-    
-    feedback = data['feedback']
-    
+@research_bp.route('/<guide_id>', methods=['GET'])
+async def research_page(guide_id: str):
+    """Render the research page for a guide"""
+    logger.debug(f"Rendering research page for guide: {guide_id}")
     try:
         db = get_database()
         guide = db.guides.find_one({"_id": ObjectId(guide_id)})
         
         if not guide:
-            return jsonify({"error": "Guide not found"}), 404
+            logger.error(f"Guide not found: {guide_id}")
+            return jsonify({
+                'status': 'error',
+                'message': 'No research results found'
+            }), 404
+            
+        logger.debug(f"Found guide: {guide}")
         
-        # Log the feedback as an interaction
-        interaction = {
-            "step": "feedback",
-            "ai": "User",
-            "query": "User feedback on research",
-            "response": feedback,
-            "token_cost": 0,  # No token cost for user feedback
-            "timestamp": datetime.utcnow()
-        }
+        # Start research in background if not already started
+        if guide.get('status') == 'initializing':
+            logger.debug(f"Starting background research for guide: {guide_id}")
+            # Create a new event loop for the background task
+            loop = asyncio.get_event_loop()
+            # Create and await the research task
+            task = asyncio.create_task(run_guide_research(guide_id))
+            # Add a callback to handle task completion
+            task.add_done_callback(lambda t: logger.debug("Background research task completed"))
+            logger.debug("Background research task created")
+        else:
+            logger.debug(f"Guide status is {guide.get('status')}, not starting research")
+            
+        return render_template('research.html', 
+                             guide_id=guide_id,
+                             topic=guide['topic'])
+            
+    except Exception as e:
+        logger.error(f"Error rendering research page: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+async def run_guide_research(guide_id: str):
+    """Run research for a guide in the background"""
+    logger.debug(f"Starting background research for guide: {guide_id}")
+    try:
+        db = get_database()
+        logger.debug(f"Looking up guide in database: {guide_id}")
+        guide = db.guides.find_one({"_id": ObjectId(guide_id)})
         
+        if not guide:
+            logger.error(f"Guide not found for background research: {guide_id}")
+            return
+            
+        logger.debug(f"Found guide for research: {guide}")
+        logger.debug(f"Guide topic: {guide['topic']}")
+        logger.debug(f"Current guide status: {guide.get('status')}")
+        
+        # Update guide status to in_progress
+        logger.debug("Updating guide status to in_progress")
         db.guides.update_one(
             {"_id": ObjectId(guide_id)},
-            {"$push": {"ai_interactions": interaction}}
-        )
-        
-        return jsonify({
-            "guide_id": guide_id,
-            "message": "Feedback received successfully"
-        }), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@research_bp.route('/shared', methods=['GET'])
-def get_shared_research():
-    """
-    Get shared research from the research collection
-    """
-    try:
-        topic = request.args.get('topic')
-        db = get_database()
-        
-        # Default limit and page
-        limit = int(request.args.get('limit', 10))
-        page = int(request.args.get('page', 1))
-        skip = (page - 1) * limit
-        
-        # Build the query
-        query = {}
-        if topic:
-            query['topic'] = {'$regex': topic, '$options': 'i'}
-        
-        # Count total results
-        total = db.research.count_documents(query)
-        
-        # Get paginated results
-        results = list(db.research.find(
-            query, 
-            {'_id': 0}  # Don't include the MongoDB ID in results
-        ).sort('timestamp', -1).skip(skip).limit(limit))
-        
-        return jsonify({
-            'total': total,
-            'page': page,
-            'limit': limit,
-            'results': results
-        }), 200
-        
-    except Exception as e:
-        current_app.logger.error(f"Error retrieving shared research: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@research_bp.route('/recursive/<guide_id>', methods=['POST'])
-def trigger_recursive_research(guide_id):
-    """
-    Trigger recursive research on subtopics identified in initial research
-    """
-    try:
-        db = get_database()
-        guide = db.guides.find_one({"_id": ObjectId(guide_id)})
-        
-        if not guide:
-            return jsonify({"error": "Guide not found"}), 404
-        
-        # Get the research document
-        research = db.research.find_one({"guide_id": guide_id})
-        
-        if not research:
-            return jsonify({"error": "Research not found for this guide"}), 404
-            
-        if "further_research_topics" not in research or not research["further_research_topics"]:
-            return jsonify({"error": "No further research topics identified"}), 400
-            
-        # Check if recursive research is already in progress
-        if research.get("recursive_research_in_progress", False):
-            return jsonify({
-                "message": "Recursive research is already in progress",
-                "further_topics": research["further_research_topics"]
-            }), 200
-        
-        # Mark recursive research as in progress
-        db.research.update_one(
-            {"_id": research["_id"]},
-            {"$set": {"recursive_research_in_progress": True}}
-        )
-        
-        # In a production environment, you would trigger asynchronous research here
-        # For now, we'll just return the list of topics
-        
-        return jsonify({
-            "message": "Recursive research triggered",
-            "guide_id": guide_id,
-            "further_topics": research["further_research_topics"],
-            "status": "queued"
-        }), 200
-        
-    except Exception as e:
-        current_app.logger.error(f"Error triggering recursive research: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-        
-@research_bp.route('/structured/<guide_id>', methods=['GET'])
-def get_structured_research(guide_id):
-    """
-    Get the structured JSON research data for a specific guide
-    """
-    try:
-        db = get_database()
-        guide = db.guides.find_one({"_id": ObjectId(guide_id)})
-        
-        if not guide:
-            return jsonify({"error": "Guide not found"}), 404
-            
-        # Check if there's a research document for this guide
-        research = db.research.find_one({"guide_id": guide_id})
-        
-        if research and "structured_data" in research:
-            return jsonify({
-                "guide_id": guide_id,
-                "topic": guide.get("topic", ""),
-                "structured_data": research["structured_data"]
-            }), 200
-            
-        # If not found in research collection, check the guide document
-        research_data = guide.get("research", {})
-        if "structured_data" in research_data:
-            return jsonify({
-                "guide_id": guide_id,
-                "topic": guide.get("topic", ""),
-                "structured_data": research_data["structured_data"]
-            }), 200
-        
-        return jsonify({
-            "guide_id": guide_id,
-            "topic": guide.get("topic", ""),
-            "message": "No structured data available",
-            "structured_data": {}
-        }), 200 
-        
-    except Exception as e:
-        current_app.logger.error(f"Error retrieving structured data: {str(e)}")
-        return jsonify({'error': str(e)}), 500 
-
-@research_bp.route('/initialize/<guide_id>', methods=['POST'])
-def initialize_research_document(guide_id):
-    """
-    Initialize a research document in the research collection for a guide
-    if it doesn't exist yet
-    """
-    try:
-        data = request.get_json() or {}
-        further_research_topics = data.get('further_research_topics', [])
-        
-        db = get_database()
-        guide = db.guides.find_one({"_id": ObjectId(guide_id)})
-        
-        if not guide:
-            return jsonify({"error": "Guide not found"}), 404
-        
-        # Check if research document already exists
-        existing_research = db.research.find_one({"guide_id": guide_id})
-        
-        if existing_research:
-            return jsonify({
-                "message": "Research document already exists",
-                "guide_id": guide_id
-            }), 200
-        
-        # Create initial research document
-        research_doc = {
-            "guide_id": guide_id,
-            "topic": guide.get("topic", ""),
-            "timestamp": datetime.utcnow(),
-            "subtopic_research_in_progress": False,
-            "further_research_topics": further_research_topics,
-            "subtopic_results": [],
-            "subtopic_research_progress": {
-                "total_topics": 0,
-                "completed_topics": 0,
-                "percentage": 0,
-                "last_updated": datetime.utcnow()
-            }
-        }
-        
-        # Insert the new research document
-        result = db.research.insert_one(research_doc)
-        
-        return jsonify({
-            "message": "Research document initialized successfully",
-            "guide_id": guide_id,
-            "research_id": str(result.inserted_id)
-        }), 201
-        
-    except Exception as e:
-        current_app.logger.error(f"Error initializing research document: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@research_bp.route('/subtopics/<guide_id>', methods=['POST'])
-def research_selected_subtopics(guide_id):
-    """
-    Trigger research on selected subtopics
-    """
-    try:
-        data = request.get_json() or {}
-        selected_topics = data.get('selected_topics', [])
-        
-        if not selected_topics:
-            return jsonify({"error": "No topics selected"}), 400
-            
-        db = get_database()
-        guide = db.guides.find_one({"_id": ObjectId(guide_id)})
-        
-        if not guide:
-            return jsonify({"error": "Guide not found"}), 404
-        
-        # Get the research document
-        research = db.research.find_one({"guide_id": guide_id})
-        
-        if not research:
-            return jsonify({"error": "Research not found for this guide"}), 404
-            
-        # Check if subtopic research is already in progress
-        if research.get("subtopic_research_in_progress", False):
-            # Return current progress
-            progress = research.get("subtopic_research_progress", {})
-            return jsonify({
-                "message": "Subtopic research is already in progress",
-                "progress": progress
-            }), 200
-        
-        # Mark subtopic research as in progress and initialize progress
-        db.research.update_one(
-            {"_id": research["_id"]},
             {
                 "$set": {
-                    "subtopic_research_in_progress": True,
-                    "subtopic_research_progress": {
-                        "total_topics": len(selected_topics),
-                        "completed_topics": 0,
-                        "percentage": 0,
-                        "last_updated": datetime.utcnow()
-                    }
+                    "status": "in_progress",
+                    "metadata.updated": datetime.utcnow()
                 }
             }
         )
         
-        # Start subtopic research in background
-        topic = guide["topic"]
+        # Create research chain and run research within its context
+        logger.debug("Creating research chain with services")
+        research_chain = await create_research_chain()
+        logger.debug(f"Starting research for topic: {guide['topic']}")
+        logger.debug("Initiating research_chain call")
+        research_results = await research_chain.run(guide['topic'], "")
+        logger.debug("Research completed successfully")
+        logger.debug(f"Research results: {json.dumps(research_results, indent=2)}")
         
-        def run_subtopic_research():
-            """Run the subtopic research in a background thread with its own event loop"""
-            async def start_subtopic_research():
-                try:
-                    # Create research orchestrator
-                    orchestrator = ResearchOrchestrator(topic, guide_id)
-                    
-                    # Run subtopic research
-                    await orchestrator.research_selected_subtopics(selected_topics)
-                except Exception as e:
-                    current_app.logger.error(f"Error in subtopic research: {str(e)}")
-                    # Update status to error
-                    db = get_database()
-                    db.research.update_one(
-                        {"guide_id": guide_id},
-                        {
-                            "$set": {
-                                "subtopic_research_in_progress": False,
-                                "subtopic_research_error": str(e)
-                            }
-                        }
-                    )
-            
-            # Create new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(start_subtopic_research())
-            finally:
-                loop.close()
+        # Create research result
+        research = ResearchResult(
+            summary=research_results["summary"],
+            key_points=research_results["key_points"],
+            entities=research_results["entities"],
+            subtopics=research_results["subtopics"],
+            timeline=research_results["timeline"],
+            further_research=research_results["further_research"],
+            references=research_results["references"],
+            web_results=research_results.get("web_results", [])
+        )
         
-        # Start the background thread
-        import threading
-        thread = threading.Thread(target=run_subtopic_research)
-        thread.daemon = True  # Make thread daemon so it exits when main thread exits
-        thread.start()
-        
-        return jsonify({
-            "message": "Subtopic research triggered",
-            "guide_id": guide_id,
-            "selected_topics": len(selected_topics),
-            "status": "in_progress"
-        }), 200
+        # Update guide with results
+        logger.debug("Updating guide with research results")
+        db.guides.update_one(
+            {"_id": ObjectId(guide_id)},
+            {
+                "$set": {
+                    "status": "completed",
+                    "research_results": research.to_dict(),
+                    "metadata.updated": datetime.utcnow()
+                }
+            }
+        )
+        logger.debug("Guide updated successfully with research results")
         
     except Exception as e:
-        current_app.logger.error(f"Error triggering subtopic research: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@research_bp.route('/subtopics/<guide_id>/status', methods=['GET'])
-def get_subtopic_research_status(guide_id):
-    """
-    Get the status of subtopic research for a guide
-    """
-    try:
-        db = get_database()
-        research = db.research.find_one({"guide_id": guide_id})
-        
-        if not research:
-            return jsonify({"error": "Research not found"}), 404
-            
-        # Get status and progress
-        in_progress = research.get("subtopic_research_in_progress", False)
-        progress = research.get("subtopic_research_progress", {})
-        error = research.get("subtopic_research_error")
-        
-        status = "not_started"
-        if in_progress:
-            status = "in_progress"
-        elif error:
-            status = "error"
-        elif research.get("subtopic_results"):
-            status = "completed"
-        
-        return jsonify({
-            "guide_id": guide_id,
-            "status": status,
-            "progress": progress,
-            "error": error,
-            "in_progress": in_progress,
-            "topics_count": progress.get("total_topics", 0)
-        }), 200
-        
-    except Exception as e:
-        current_app.logger.error(f"Error getting subtopic research status: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@research_bp.route('/subtopics/<guide_id>/results', methods=['GET'])
-def get_subtopic_research_results(guide_id):
-    """
-    Get the results of subtopic research for a guide
-    """
-    try:
-        db = get_database()
-        research = db.research.find_one({"guide_id": guide_id})
-        
-        if not research:
-            return jsonify({"error": "Research not found"}), 404
-            
-        # Get subtopic results
-        results = research.get("subtopic_results", [])
-        
-        # Get further research topics (potential future subtopics)
-        further_topics = research.get("further_research_topics", [])
-        
-        # Create a list of already researched topic names
-        researched_topics = [r.get("topic") for r in results]
-        
-        # Filter out topics that have already been researched
-        available_topics = [t for t in further_topics if t.get("topic") not in researched_topics]
-        
-        return jsonify({
-            "guide_id": guide_id,
-            "subtopic_results": results,
-            "available_topics": available_topics,  # Topics that can still be researched
-            "in_progress": research.get("subtopic_research_in_progress", False)
-        }), 200
-        
-    except Exception as e:
-        current_app.logger.error(f"Error getting subtopic research results: {str(e)}")
-        return jsonify({'error': str(e)}), 500 
+        logger.error(f"Research error occurred: {str(e)}", exc_info=True)
+        logger.debug("Updating guide status to error")
+        # Update guide status to error
+        db.guides.update_one(
+            {"_id": ObjectId(guide_id)},
+            {
+                "$set": {
+                    "status": "error",
+                    "error_message": str(e),
+                    "metadata.updated": datetime.utcnow()
+                }
+            }
+        )
+        logger.debug("Guide updated with error status")
+        raise 

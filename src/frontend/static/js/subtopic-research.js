@@ -4,30 +4,6 @@
  */
 
 /**
- * Checks if a guide is ready for subtopic research
- * @param {string} guideId - The guide ID
- * @returns {Promise<boolean>} - Promise that resolves to true if guide is ready
- */
-function isGuideReadyForSubtopicResearch(guideId) {
-    return new Promise((resolve, reject) => {
-        fetch(`/api/research/${guideId}`)
-            .then(response => response.json())
-            .then(data => {
-                // Guide is ready if it's in paused_research state
-                const isReady = data.status === 'paused_research';
-                if (!isReady) {
-                    console.log(`Guide not ready for subtopic research. Current status: ${data.status}`);
-                }
-                resolve(isReady);
-            })
-            .catch(error => {
-                console.error("Error checking guide status:", error);
-                reject(error);
-            });
-    });
-}
-
-/**
  * Creates and displays the interactive subtopic selection UI
  * @param {string} guideId - The guide ID
  */
@@ -51,7 +27,7 @@ function createSubtopicSelectionUI(guideId) {
                 <div class="spinner-border spinner-border-sm me-2" role="status">
                     <span class="visually-hidden">Loading...</span>
                 </div>
-                Initial research in progress. Please wait...
+                Loading research topics...
             </div>
         </div>
     `;
@@ -64,51 +40,17 @@ function createSubtopicSelectionUI(guideId) {
         document.body.appendChild(loadingContainer);
     }
     
-    // Check if guide is ready for subtopic research
-    isGuideReadyForSubtopicResearch(guideId)
-        .then(isReady => {
-            if (!isReady) {
-                // If not ready, start polling for status
-                const pollInterval = setInterval(() => {
-                    isGuideReadyForSubtopicResearch(guideId)
-                        .then(isReady => {
-                            if (isReady) {
-                                clearInterval(pollInterval);
-                                // Remove loading container and proceed with initialization
-                                loadingContainer.remove();
-                                initializeSubtopicResearch(guideId);
-                            }
-                        })
-                        .catch(error => {
-                            console.error("Error polling guide status:", error);
-                            clearInterval(pollInterval);
-                            loadingContainer.innerHTML = `
-                                <div class="card-header">
-                                    <h3>Explore Subtopics</h3>
-                                </div>
-                                <div class="card-body">
-                                    <div class="alert alert-danger">
-                                        Error checking guide status. Please try refreshing the page.
-                                    </div>
-                                </div>
-                            `;
-                        });
-                }, 5000); // Check every 5 seconds
-            } else {
-                // If ready, proceed with initialization
-                loadingContainer.remove();
-                initializeSubtopicResearch(guideId);
-            }
-        })
+    // Initialize subtopic research directly
+    initializeSubtopicResearch(guideId)
         .catch(error => {
-            console.error("Error checking guide status:", error);
+            console.error("Error initializing subtopic research:", error);
             loadingContainer.innerHTML = `
                 <div class="card-header">
                     <h3>Explore Subtopics</h3>
                 </div>
                 <div class="card-body">
                     <div class="alert alert-danger">
-                        Error checking guide status. Please try refreshing the page.
+                        Error loading research topics. Please try refreshing the page.
                     </div>
                 </div>
             `;
@@ -116,60 +58,39 @@ function createSubtopicSelectionUI(guideId) {
 }
 
 /**
- * Initializes the subtopic research UI once the guide is ready
+ * Initializes the subtopic research UI
  * @param {string} guideId - The guide ID
  */
-function initializeSubtopicResearch(guideId) {
-    // Check if further research topics are available
-    fetch(`/api/research/structured/${guideId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (!data.structured_data?.deep_research?.further_research) {
-                console.log("No further research topics available");
-                return;
-            }
-            
-            const furtherTopics = data.structured_data.deep_research.further_research;
-            
-            // Initialize research document if it doesn't exist
-            initializeResearchDocument(guideId, furtherTopics)
-                .then(() => {
-                    // Get any existing subtopic research results
-                    fetch(`/api/research/subtopics/${guideId}/results`)
-                        .then(res => {
-                            if (res.status === 404) {
-                                // If research not found in the research collection, use topics from structured data
-                                console.log("No subtopic research results found, using topics from structured data");
-                                renderSubtopicSelector(guideId, furtherTopics, [], false);
-                                return null;
-                            }
-                            return res.json();
-                        })
-                        .then(subtopicData => {
-                            if (!subtopicData) return; // Handle case where we got a 404 and returned null
-                            
-                            const availableTopics = subtopicData.available_topics || furtherTopics;
-                            const subtopicResults = subtopicData.subtopic_results || [];
-                            const inProgress = subtopicData.in_progress;
-                            
-                            // Create the subtopic selector UI
-                            renderSubtopicSelector(guideId, availableTopics, subtopicResults, inProgress);
-                        })
-                        .catch(error => {
-                            console.error("Error fetching subtopic results:", error);
-                            // Fall back to all topics from structured data
-                            renderSubtopicSelector(guideId, furtherTopics, [], false);
-                        });
-                })
-                .catch(error => {
-                    console.error("Error initializing research document:", error);
-                    // If we can't initialize, still try to render what we have
-                    renderSubtopicSelector(guideId, furtherTopics, [], false);
-                });
-        })
-        .catch(error => {
-            console.error("Error fetching structured research:", error);
-        });
+async function initializeSubtopicResearch(guideId) {
+    try {
+        // Get research results
+        const response = await fetch(`/api/research/results/${guideId}`);
+        const data = await response.json();
+        
+        if (data.status === 'error') {
+            console.error("Error fetching research results:", data.message);
+            renderSubtopicSelector(guideId, [], [], false);
+            return;
+        }
+        
+        if (!data.research?.research_results) {
+            console.log("No research results available");
+            renderSubtopicSelector(guideId, [], [], false);
+            return;
+        }
+        
+        const researchData = data.research.research_results;
+        const furtherTopics = researchData.further_research || [];
+        const subtopicResults = data.research.children || [];
+        
+        // Create the subtopic selector UI
+        renderSubtopicSelector(guideId, furtherTopics, subtopicResults, false);
+        
+    } catch (error) {
+        console.error("Error in subtopic research initialization:", error);
+        // If we can't initialize, render empty state
+        renderSubtopicSelector(guideId, [], [], false);
+    }
 }
 
 /**
@@ -181,7 +102,7 @@ function initializeSubtopicResearch(guideId) {
 function initializeResearchDocument(guideId, furtherTopics) {
     return new Promise((resolve, reject) => {
         // Try to fetch the research document first
-        fetch(`/api/research/subtopics/${guideId}/results`)
+        fetch(`/api/research/results/${guideId}`)
             .then(res => {
                 if (res.status === 404) {
                     // If 404, it doesn't exist yet, so we need to initialize it
@@ -216,7 +137,7 @@ function initializeResearchDocument(guideId, furtherTopics) {
 }
 
 /**
- * Renders the subtopic selector UI with checkboxes
+ * Renders the subtopic selector UI with individual Explore Further buttons
  * @param {string} guideId - The guide ID
  * @param {Array} availableTopics - Topics available for research
  * @param {Array} completedSubtopics - Already researched subtopics
@@ -244,31 +165,33 @@ function renderSubtopicSelector(guideId, availableTopics, completedSubtopics, in
     // Create header and introductory content
     container.innerHTML = `
         <div class="card-header">
-            <h3>Explore Subtopics</h3>
+            <h3>Explore Research Topics</h3>
         </div>
         <div class="card-body">
-            <p>Select specific subtopics you want to research further:</p>
             <div id="subtopic-selection-area" class="mb-3">
-                ${availableTopics.length === 0 ? '<p>No more subtopics available to research.</p>' : ''}
+                ${availableTopics.length === 0 ? '<p>No more research topics available.</p>' : ''}
+                ${availableTopics.map(topic => `
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h5 class="card-title">${topic.topic}</h5>
+                            <p class="card-text">${topic.rationale}</p>
+                            <button 
+                                class="btn btn-primary explore-topic-btn" 
+                                data-topic='${JSON.stringify(topic)}'
+                                ${inProgress ? 'disabled' : ''}>
+                                Explore Further
+                            </button>
+                        </div>
+                    </div>
+                `).join('')}
             </div>
-            
-            ${availableTopics.length > 0 ? `
-                <div class="subtopic-selector-controls mb-3">
-                    <button id="select-all-subtopics" class="btn btn-sm btn-outline-secondary me-2">Select All</button>
-                    <button id="deselect-all-subtopics" class="btn btn-sm btn-outline-secondary">Deselect All</button>
-                </div>
-                
-                <button id="research-selected-subtopics" class="btn btn-primary" ${inProgress ? 'disabled' : ''}>
-                    Research Selected Subtopics
-                </button>
-            ` : ''}
             
             ${inProgress ? `
                 <div class="alert alert-info mt-3">
                     <div class="spinner-border spinner-border-sm me-2" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
-                    Subtopic research in progress...
+                    Research in progress...
                 </div>
                 <div class="progress mt-2">
                     <div id="subtopic-progress-bar" class="progress-bar" style="width: 0%"></div>
@@ -276,204 +199,81 @@ function renderSubtopicSelector(guideId, availableTopics, completedSubtopics, in
                 <div id="subtopic-progress-text" class="text-center">Initializing...</div>
             ` : ''}
         </div>
-        
-        <div class="card-header mt-3">
-            <h3>Completed Subtopic Research</h3>
-        </div>
-        <div class="card-body">
-            <div id="completed-subtopics-area">
-                ${completedSubtopics.length === 0 ? '<p>No subtopics have been researched yet.</p>' : ''}
-            </div>
-        </div>
     `;
     
-    // Populate available topics with checkboxes
-    const selectionArea = document.getElementById('subtopic-selection-area');
-    if (selectionArea && availableTopics.length > 0) {
-        availableTopics.forEach((topic, index) => {
-            const topicElement = document.createElement('div');
-            topicElement.className = 'form-check subtopic-option mb-2 p-2 border rounded';
-            
-            topicElement.innerHTML = `
-                <input class="form-check-input subtopic-checkbox" type="checkbox" id="subtopic-${index}" 
-                       data-topic='${JSON.stringify(topic).replace(/'/g, "&#39;")}'>
-                <label class="form-check-label w-100" for="subtopic-${index}">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <strong>${topic.topic}</strong>
-                    </div>
-                    <div class="subtopic-rationale text-muted mt-1">${topic.rationale}</div>
-                </label>
+    // Add click handlers for Explore Further buttons
+    container.querySelectorAll('.explore-topic-btn').forEach(button => {
+        button.addEventListener('click', async (event) => {
+            const topic = JSON.parse(event.target.dataset.topic);
+            event.target.disabled = true;
+            event.target.innerHTML = `
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                Researching...
             `;
             
-            selectionArea.appendChild(topicElement);
-        });
-    }
-    
-    // Populate completed subtopics
-    const completedArea = document.getElementById('completed-subtopics-area');
-    if (completedArea && completedSubtopics.length > 0) {
-        completedSubtopics.forEach(subtopic => {
-            const subtopicElement = document.createElement('div');
-            subtopicElement.className = 'completed-subtopic mb-3 p-3 border rounded';
-            
-            let statusBadge = '';
-            if (subtopic.status === 'completed') {
-                statusBadge = '<span class="badge bg-success">Completed</span>';
-            } else if (subtopic.status === 'error') {
-                statusBadge = '<span class="badge bg-danger">Error</span>';
+            try {
+                await triggerSubtopicResearch(guideId, [topic]);
+                // Refresh the UI after research is complete
+                await initializeSubtopicResearch(guideId);
+            } catch (error) {
+                console.error('Error researching topic:', error);
+                event.target.disabled = false;
+                event.target.innerHTML = 'Explore Further';
+                // Show error message
+                const errorAlert = document.createElement('div');
+                errorAlert.className = 'alert alert-danger mt-3';
+                errorAlert.textContent = 'Failed to research topic. Please try again.';
+                event.target.parentElement.appendChild(errorAlert);
             }
-            
-            subtopicElement.innerHTML = `
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h4 class="m-0">${subtopic.topic}</h4>
-                    ${statusBadge}
-                </div>
-                <div class="subtopic-rationale text-muted mb-2">${subtopic.rationale || ''}</div>
-                <div class="subtopic-summary">
-                    ${subtopic.research_summary || 'No summary available'}
-                </div>
-                <div class="mt-2">
-                    <a href="#" class="view-subtopic-link" data-guide-id="${subtopic.guide_id}">
-                        View Full Research
-                    </a>
-                </div>
-            `;
-            
-            completedArea.appendChild(subtopicElement);
         });
-        
-        // Add event listeners to view subtopic links
-        document.querySelectorAll('.view-subtopic-link').forEach(link => {
-            link.addEventListener('click', (e) => {
-                e.preventDefault();
-                const subtopicGuideId = e.target.getAttribute('data-guide-id');
-                if (subtopicGuideId) {
-                    // Redirect to the research page for this subtopic
-                    window.location.href = `/?guide_id=${subtopicGuideId}`;
-                }
-            });
-        });
-    }
-    
-    // Add event listeners for select/deselect all buttons
-    const selectAllBtn = document.getElementById('select-all-subtopics');
-    const deselectAllBtn = document.getElementById('deselect-all-subtopics');
-    const researchBtn = document.getElementById('research-selected-subtopics');
-    
-    if (selectAllBtn) {
-        selectAllBtn.addEventListener('click', () => {
-            document.querySelectorAll('.subtopic-checkbox').forEach(checkbox => {
-                checkbox.checked = true;
-            });
-        });
-    }
-    
-    if (deselectAllBtn) {
-        deselectAllBtn.addEventListener('click', () => {
-            document.querySelectorAll('.subtopic-checkbox').forEach(checkbox => {
-                checkbox.checked = false;
-            });
-        });
-    }
-    
-    if (researchBtn) {
-        researchBtn.addEventListener('click', () => {
-            const selectedTopics = [];
-            document.querySelectorAll('.subtopic-checkbox:checked').forEach(checkbox => {
-                try {
-                    const topicData = JSON.parse(checkbox.getAttribute('data-topic'));
-                    selectedTopics.push(topicData);
-                } catch (e) {
-                    console.error("Error parsing topic data", e);
-                }
-            });
-            
-            if (selectedTopics.length === 0) {
-                alert("Please select at least one subtopic to research.");
-                return;
-            }
-            
-            // Trigger research for selected subtopics
-            triggerSubtopicResearch(guideId, selectedTopics);
-        });
-    }
-    
-    // If research is in progress, start polling for status
-    if (inProgress) {
-        pollSubtopicResearchStatus(guideId);
-    }
+    });
 }
 
 /**
- * Triggers research on selected subtopics
+ * Triggers research on selected topics
  * @param {string} guideId - The guide ID
  * @param {Array} selectedTopics - Array of selected topics
  */
-function triggerSubtopicResearch(guideId, selectedTopics) {
-    // Disable the research button during research
+async function triggerSubtopicResearch(guideId, selectedTopics) {
     const researchBtn = document.getElementById('research-selected-subtopics');
     if (researchBtn) {
         researchBtn.disabled = true;
         researchBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
     }
     
-    // Create a progress section to show research is in progress
-    const progressSection = document.createElement('div');
-    progressSection.id = 'subtopic-research-progress-container';
-    progressSection.className = 'mt-4 p-3 border rounded';
-    progressSection.innerHTML = `
-        <h5>Research in Progress</h5>
-        <div class="progress">
-            <div id="subtopic-research-progress-bar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
-        </div>
-        <p id="subtopic-research-status" class="mt-2">Starting research on ${selectedTopics.length} topics...</p>
-    `;
-    
-    const container = document.getElementById('subtopic-research-container');
-    if (container) {
-        container.appendChild(progressSection);
-    }
-    
-    // Make POST request to trigger research
-    fetch(`/api/research/subtopics/${guideId}`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            selected_topics: selectedTopics
-        })
-    })
-    .then(response => {
-        // Check for HTTP errors
-        if (!response.ok) {
-            const status = response.status;
-            if (status === 404) {
-                throw new Error("Research data not initialized. Try refreshing the page to ensure proper initialization.");
+    try {
+        // Process each topic individually
+        for (const topicData of selectedTopics) {
+            // Make POST request to trigger research for this topic
+            const response = await fetch(`/api/research/${guideId}/subtopics`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    topic: topicData.topic  // Send just the topic string
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`Server returned ${response.status}: ${response.statusText}`);
             }
-            throw new Error(`Server returned ${status}: ${response.statusText}`);
-        }
-        return response.json();
-    })
-    .then(data => {
-        // Check for API errors
-        if (data.error) {
-            throw new Error(data.error);
+
+            const data = await response.json();
+            
+            // Check for API errors
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            
+            console.log("Research triggered for topic:", topicData.topic, data);
         }
         
-        console.log("Research triggered:", data);
+        // Refresh the subtopic selector UI with new results
+        await initializeSubtopicResearch(guideId);
         
-        // Start polling for progress updates
-        pollSubtopicResearchStatus(guideId);
-    })
-    .catch(error => {
+    } catch (error) {
         console.error("Error triggering research:", error);
-        
-        // Remove progress section on error
-        const progressSection = document.getElementById('subtopic-research-progress-container');
-        if (progressSection) {
-            progressSection.remove();
-        }
         
         // Show error alert
         alert(`Error starting research: ${error.message}`);
@@ -481,74 +281,185 @@ function triggerSubtopicResearch(guideId, selectedTopics) {
         // Re-enable research button
         if (researchBtn) {
             researchBtn.disabled = false;
-            researchBtn.innerHTML = 'Research Selected Subtopics';
+            researchBtn.innerHTML = 'Research Selected Topics';
         }
-    });
+    }
 }
 
 /**
- * Polls for subtopic research status updates
- * @param {string} guideId - The guide ID
+ * Initializes research for a specific topic
+ * @param {string} topicId - The topic ID
+ * @param {string} topic - The topic text
  */
-function pollSubtopicResearchStatus(guideId) {
-    const progressBar = document.getElementById('subtopic-research-progress-bar');
-    const progressText = document.getElementById('subtopic-research-status');
-    
-    // Set up polling interval (check every 5 seconds)
-    const pollInterval = setInterval(() => {
-        fetch(`/api/research/subtopics/${guideId}/status`)
-            .then(response => {
-                if (response.status === 404) {
-                    // If research not found in the research collection, stop polling
-                    clearInterval(pollInterval);
-                    if (progressText) {
-                        progressText.textContent = 'No subtopic research data available yet';
-                    }
-                    return null;
-                }
-                return response.json();
-            })
-            .then(data => {
-                if (!data) return; // Handle case where we got a 404 and returned null
+function initializeTopicResearch(topicId, topic) {
+    // First, initialize the research document for this topic
+    fetch(`/api/research/results/${topicId}`)
+        .then(response => response.json())
+        .then(data => {
+            const container = document.getElementById(`topic-research-${topicId}`);
+            if (container) {
+                // Get the research data
+                const researchData = data.research?.research_results || {};
                 
-                if (data.error) {
-                    clearInterval(pollInterval);
-                    if (progressText) {
-                        progressText.textContent = `Error: ${data.error}`;
-                    }
-                    return;
-                }
+                // Create the research content
+                let content = `
+                    <div class="card">
+                        <div class="card-header">
+                            <h4>Researching: ${topic}</h4>
+                        </div>
+                        <div class="card-body">
+                            <div class="research-content">
+                                ${researchData.summary ? `
+                                    <div class="summary-section mb-4">
+                                        <h5>Summary</h5>
+                                        <p>${researchData.summary}</p>
+                                    </div>
+                                ` : ''}
+                                
+                                ${researchData.key_points?.length ? `
+                                    <div class="key-points-section mb-4">
+                                        <h5>Key Points</h5>
+                                        <ul>
+                                            ${researchData.key_points.map(point => `<li>${point}</li>`).join('')}
+                                        </ul>
+                                    </div>
+                                ` : ''}
+                                
+                                ${researchData.entities?.length ? `
+                                    <div class="entities-section mb-4">
+                                        <h5>Key Entities</h5>
+                                        <div class="row">
+                                            ${researchData.entities.map(entity => `
+                                                <div class="col-md-6 mb-3">
+                                                    <div class="card">
+                                                        <div class="card-body">
+                                                            <h6>${entity.name}</h6>
+                                                            <p class="text-muted">${entity.type}</p>
+                                                            <p>${entity.description}</p>
+                                                            <small>Relevance: ${entity.relevance}</small>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                
+                                ${researchData.timeline?.length ? `
+                                    <div class="timeline-section mb-4">
+                                        <h5>Timeline</h5>
+                                        <div class="timeline">
+                                            ${researchData.timeline.map(event => `
+                                                <div class="timeline-item">
+                                                    <div class="timeline-date">${event.date}</div>
+                                                    <div class="timeline-content">
+                                                        <h6>${event.event}</h6>
+                                                        <p>${event.significance}</p>
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                
+                                ${researchData.further_research?.length ? `
+                                    <div class="further-research-section mb-4">
+                                        <h5>Further Research Topics</h5>
+                                        <div class="row">
+                                            ${researchData.further_research.map(topic => `
+                                                <div class="col-md-6 mb-3">
+                                                    <div class="card">
+                                                        <div class="card-body">
+                                                            <h6>${topic.topic}</h6>
+                                                            <p>${topic.rationale}</p>
+                                                            <button class="btn btn-primary explore-further-btn" 
+                                                                    data-topic-id="${topicId}" 
+                                                                    data-topic="${encodeURIComponent(topic.topic)}">
+                                                                Explore Further
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                
+                                ${researchData.references?.length ? `
+                                    <div class="references-section">
+                                        <h5>References</h5>
+                                        <ul class="list-unstyled">
+                                            ${researchData.references.map(ref => `
+                                                <li class="mb-2">
+                                                    <strong>${ref.title}</strong>
+                                                    <br>
+                                                    <small>${ref.source}</small>
+                                                    ${ref.url ? `<br><a href="${ref.url}" target="_blank">View Source</a>` : ''}
+                                                </li>
+                                            `).join('')}
+                                        </ul>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
                 
-                // Update progress indicators
-                const progress = data.progress || {};
-                const percentage = progress.percentage || 0;
-                const completedTopics = progress.completed_topics || 0;
-                const totalTopics = progress.total_topics || 0;
+                // Update the container with the research content
+                container.innerHTML = content;
                 
-                if (progressBar) {
-                    progressBar.style.width = `${percentage}%`;
-                }
-                
-                if (progressText) {
-                    progressText.textContent = `${completedTopics}/${totalTopics} topics (${Math.round(percentage)}%)`;
-                }
-                
-                // Check if research is complete
-                if (data.status === 'completed' || !data.in_progress) {
-                    clearInterval(pollInterval);
-                    
-                    if (progressText) {
-                        progressText.textContent = 'Research completed!';
-                    }
-                    
-                    // Reload the subtopic UI to show the new results
-                    setTimeout(() => {
-                        createSubtopicSelectionUI(guideId);
-                    }, 1500);
-                }
-            })
-            .catch(error => {
-                console.error("Error polling subtopic status:", error);
-            });
-    }, 5000);
+                // Add event listeners to explore further buttons
+                container.querySelectorAll('.explore-further-btn').forEach(button => {
+                    button.addEventListener('click', (e) => {
+                        const newTopicId = e.target.getAttribute('data-topic-id');
+                        const newTopic = decodeURIComponent(e.target.getAttribute('data-topic'));
+                        if (newTopicId) {
+                            // Create a new research container for this topic
+                            const topicContainer = document.createElement('div');
+                            topicContainer.id = `topic-research-${newTopicId}`;
+                            topicContainer.className = 'topic-research-container mt-4';
+                            
+                            // Add a header showing the topic hierarchy
+                            topicContainer.innerHTML = `
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h4>Researching: ${newTopic}</h4>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="spinner-border" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <p>Loading research topics...</p>
+                                    </div>
+                                </div>
+                            `;
+                            
+                            // Insert after the current topic element
+                            e.target.closest('.card').after(topicContainer);
+                            
+                            // Initialize research for this topic
+                            initializeTopicResearch(newTopicId, newTopic);
+                        }
+                    });
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Error initializing topic research:', error);
+            const container = document.getElementById(`topic-research-${topicId}`);
+            if (container) {
+                container.innerHTML = `
+                    <div class="card">
+                        <div class="card-header">
+                            <h4>Researching: ${topic}</h4>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-danger">
+                                Error loading research data. Please try again later.
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        });
 } 

@@ -107,22 +107,33 @@ function createTopicForm(containerId, apiEndpoint) {
         // Clear any previous errors
         errorContainer.style('display', 'none');
         
-        // Submit form via API (placeholder - will be implemented fully in Task 1.1)
+        // Submit form via API
         console.log(`Submitting topic: ${topic} to API endpoint: ${apiEndpoint}`);
         
-        // Show loading indicator (placeholder)
+        // Show loading indicator
         buttonGroup.select('button')
             .text('Processing...')
             .attr('disabled', true);
         
-        // Simulate API call (this would be a real fetch call in the implementation)
-        setTimeout(() => {
-            // Restore button state
-            buttonGroup.select('button')
-                .text('Start Guide Creation')
-                .attr('disabled', null);
+        try {
+            const response = await fetch(apiEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ topic })
+            });
             
-            // Display success message (placeholder)
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            if (data.status === 'error') {
+                throw new Error(data.message);
+            }
+            
+            // Display success message
             container.select('.topic-form').style('display', 'none');
             
             container.append('div')
@@ -132,7 +143,22 @@ function createTopicForm(containerId, apiEndpoint) {
                     <p>Your guide on "<strong>${topic}</strong>" is being researched.</p>
                     <p>You will be redirected to the research approval page shortly.</p>
                 `);
-        }, 1500);
+                
+            // Redirect to research page with guide ID
+            window.location.href = `/research?guide_id=${data.guide_id}`;
+            
+        } catch (error) {
+            console.error('Failed to submit topic:', error);
+            displayFeedback(containerId, {
+                valid: false,
+                error: `Failed to submit topic: ${error.message}`
+            });
+        } finally {
+            // Restore button state
+            buttonGroup.select('button')
+                .text('Start Guide Creation')
+                .attr('disabled', null);
+        }
     });
     
     return form;

@@ -1,115 +1,227 @@
 """
-AI Council Guide Creation Website - Main Flask Application
+Quart application for the AI Council research system.
 """
+from quart import Quart, request, jsonify, render_template, send_from_directory
+from datetime import datetime
 import os
-import sys
-from flask import Flask, jsonify, render_template
-from dotenv import load_dotenv
+from typing import Dict, Any
+from quart_cors import cors
+from config import Config, MONGO_URI, MONGO_DB_NAME, XAI_API_KEY
 import logging
+from pathlib import Path
 
-# Load environment variables
-load_dotenv()
+from src.langchain.chains.ai_council import AICouncil, AICouncilMember
+from src.langchain.chains.research_services import MongoDBService
+from src.langchain.chains.research_base import ResearchConfig
 
-# Try to import from config.py
-try:
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    import config
-    MONGO_URI = getattr(config, 'MONGO_URI', None)
-except (ImportError, AttributeError):
-    MONGO_URI = None
+def create_app(config_class=Config):
+    """Create and configure the Quart application"""
+    # Get the absolute path to the src directory
+    src_dir = Path(__file__).parent
+    
+    app = Quart(__name__,
+                static_folder=src_dir / 'frontend' / 'static',
+                template_folder=src_dir / 'frontend' / 'templates')
+    
+    # Instantiate the config class
+    config = config_class()
+    app.config.from_object(config)
+    cors(app)
 
-def create_app():
-    """Create and configure the Flask application"""
-    app = Flask(__name__, 
-                static_folder='frontend/static',
-                template_folder='frontend/templates')
-    
-    # Configure logging
-    app.logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    ))
-    app.logger.addHandler(handler)
-    
-    # Basic configuration
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
-    
-    # Set MongoDB URI from config.py or environment variables
-    if MONGO_URI:
-        app.config['MONGO_URI'] = MONGO_URI
-    else:
-        app.config['MONGO_URI'] = os.environ.get('MONGO_URI') or os.environ.get('MONGODB_URI', 'mongodb://localhost:27017/ai_council')
-    
-    # Register blueprints
-    from src.backend.blueprints.research import research_bp
-    # from src.backend.blueprints.guide_output import guide_output_bp
-    app.register_blueprint(research_bp, url_prefix='/api/research')
-    # app.register_blueprint(guide_output_bp, url_prefix='/api/output')
-    
-    # Basic route for testing
-    @app.route('/api/health', methods=['GET'])
-    def health_check():
-        # Try to import config
+    # Initialize configuration
+    config = ResearchConfig.from_config(app)
+
+    # Initialize database service using MongoDBService
+    db_service = MongoDBService(config)
+
+    # Initialize AI Council with config
+    council = AICouncil(config)
+
+    # Enable Grok member (it's already enabled by default, but being explicit)
+    council.enable_member("grok")
+
+    logger = logging.getLogger(__name__)
+
+    @app.route("/")
+    async def index():
+        """Serve the main index page"""
+        return await render_template("index.html")
+
+    @app.route("/research")
+    async def research():
+        """Serve the research page"""
+        return await render_template("research.html")
+
+    @app.route("/guide/<guide_id>/research")
+    async def get_guide_research(guide_id: str):
+        """Get research results for a guide"""
+        logger.debug(f"Attempting to get research for guide_id: {guide_id}")
+        
         try:
-            import config
-            api_keys = {
-                "openai": hasattr(config, 'OPENAI_KEY') and bool(getattr(config, 'OPENAI_KEY')),
-                "anthropic": hasattr(config, 'ANTHROPIC_API_KEY') and bool(getattr(config, 'ANTHROPIC_API_KEY')),
-                "google": hasattr(config, 'GEMINI_API_KEY') and bool(getattr(config, 'GEMINI_API_KEY')),
-                "xai": hasattr(config, 'XAI_API_KEY') and bool(getattr(config, 'XAI_API_KEY')),
-            }
-        except ImportError:
-            api_keys = {
-                "openai": bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_KEY")),
-                "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")),
-                "google": bool(os.environ.get("GOOGLE_API_KEY")),
-                "xai": bool(os.environ.get("XAI_API_KEY")),
-            }
+            # Get guide data from guides collection
+            logger.debug(f"Looking up guide in guides collection: {guide_id}")
+            guide = await db_service.get_guide(guide_id)
+            logger.debug(f"Guide lookup result: {guide}")
             
-        return jsonify({
-            "status": "ok", 
-            "message": "AI Council Guide Creation Website is running",
-            "api_keys": api_keys
+            if not guide:
+                logger.error(f"Guide not found in guides collection: {guide_id}")
+                return jsonify({"error": "Guide not found"}), 404
+            
+            # Get research results
+            logger.debug(f"Getting research results for guide_id: {guide_id}")
+            results = await db_service.get_research_results(guide_id)
+            logger.debug(f"Research results lookup result: {results}")
+            
+            if not results:
+                logger.debug(f"No research results found for guide_id: {guide_id}, returning initializing state")
+                return jsonify({
+                    "status": "initializing",
+                    "research": {
+                        "topic": guide["topic"],
+                        "children": [],
+                        "research_results": {}
+                    }
+                })
+            
+            logger.debug(f"Returning completed research results for guide_id: {guide_id}")
+            return jsonify({
+                "status": "completed",
+                "research": results
+            })
+        except Exception as e:
+            logger.error(f"Error getting guide research: {str(e)}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/research", methods=["POST"])
+    async def create_research():
+        """Create a new research session and start research"""
+        logger.debug("Received request to create new research")
+        data = await request.get_json()
+        logger.debug(f"Request data: {data}")
+        
+        if not data or "topic" not in data:
+            logger.error("No topic provided in request")
+            return jsonify({"error": "Topic is required"}), 400
+            
+        # Create session in database
+        logger.debug(f"Creating research session for topic: {data['topic']}")
+        session_id = await db_service.store_research({
+            "topic": data["topic"],
+            "status": "initializing",
+            "metadata": {
+                "created": datetime.utcnow(),
+                "updated": datetime.utcnow()
+            },
+            "research": {},
+            "children": []
         })
-    
-    # API config status route
-    @app.route('/api/config/status', methods=['GET'])
-    def config_status():
-        # Try to import config
+        logger.debug(f"Created session with ID: {session_id}")
+        
+        # Start research
+        logger.debug(f"Starting research for session {session_id}")
+        research_results = await council.conduct_research(data["topic"], session_id=session_id)
+        logger.debug(f"Research completed for session {session_id}")
+        
+        # Store research results
+        logger.debug(f"Storing research results for session {session_id}")
+        await db_service.store_research(research_results, session_id)
+        logger.debug(f"Research results stored for session {session_id}")
+        
+        return jsonify({"guide_id": session_id})
+
+    @app.route("/api/research/results/<guide_id>", methods=["GET"])
+    async def get_research_results(guide_id: str):
+        """Get research results for a guide"""
         try:
-            import config
-            api_keys = {
-                "openai": hasattr(config, 'OPENAI_KEY') and bool(getattr(config, 'OPENAI_KEY')),
-                "anthropic": hasattr(config, 'ANTHROPIC_API_KEY') and bool(getattr(config, 'ANTHROPIC_API_KEY')),
-                "google": hasattr(config, 'GEMINI_API_KEY') and bool(getattr(config, 'GEMINI_API_KEY')),
-                "xai": hasattr(config, 'XAI_API_KEY') and bool(getattr(config, 'XAI_API_KEY')),
-            }
-        except ImportError:
-            api_keys = {
-                "openai": bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_KEY")),
-                "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")),
-                "google": bool(os.environ.get("GOOGLE_API_KEY")),
-                "xai": bool(os.environ.get("XAI_API_KEY")),
-            }
+            # Get guide data
+            logger.debug(f"Getting guide data for guide_id: {guide_id}")
+            guide = await db_service.get_guide(guide_id)
+            if not guide:
+                logger.error(f"Guide not found: {guide_id}")
+                return jsonify({"error": "Guide not found"}), 404
+                
+            # Get research results
+            logger.debug(f"Getting research results for guide_id: {guide_id}")
+            results = await db_service.get_research_results(guide_id)
+            if not results:
+                logger.debug(f"No research results found for guide_id: {guide_id}, returning initializing state")
+                return jsonify({
+                    "status": "initializing",
+                    "research": {
+                        "topic": guide["topic"],
+                        "children": [],
+                        "research_results": {}
+                    }
+                })
+                
+            logger.debug(f"Returning completed research results for guide_id: {guide_id}")
+            return jsonify({
+                "status": "completed",
+                "research": results
+            })
+        except Exception as e:
+            logger.error(f"Error getting research results: {str(e)}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/research/initialize/<guide_id>", methods=["POST"])
+    async def initialize_research(guide_id: str):
+        """Initialize research for a guide"""
+        try:
+            # Get guide data
+            logger.debug(f"Getting guide data for guide_id: {guide_id}")
+            guide = await db_service.get_guide(guide_id)
+            if not guide:
+                logger.error(f"Guide not found: {guide_id}")
+                return jsonify({"error": "Guide not found"}), 404
+                
+            # Start research
+            logger.debug(f"Starting research for guide_id: {guide_id}")
+            research_results = await council.conduct_research(guide["topic"], session_id=guide_id)
+            logger.debug(f"Research completed for guide_id: {guide_id}")
             
-        return jsonify({"api_keys": api_keys})
-    
-    # Frontend routes
-    @app.route('/')
-    def index():
-        return render_template('research.html')
-    
+            # Store research results
+            logger.debug(f"Storing research results for guide_id: {guide_id}")
+            await db_service.store_research(research_results, guide_id)
+            logger.debug(f"Research results stored for guide_id: {guide_id}")
+            
+            return jsonify({"status": "success"})
+        except Exception as e:
+            logger.error(f"Error initializing research: {str(e)}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/research/<guide_id>/subtopics", methods=["POST"])
+    async def research_subtopic(guide_id: str):
+        """Research a subtopic"""
+        try:
+            data = await request.get_json()
+            if not data or "topic" not in data:
+                logger.error("No topic provided in request")
+                return jsonify({"error": "Topic is required"}), 400
+                
+            # Get guide data
+            logger.debug(f"Getting guide data for guide_id: {guide_id}")
+            guide = await db_service.get_guide(guide_id)
+            if not guide:
+                logger.error(f"Guide not found: {guide_id}")
+                return jsonify({"error": "Guide not found"}), 404
+                
+            # Start research
+            logger.debug(f"Starting research for guide_id: {guide_id}")
+            research_results = await council.conduct_research(data["topic"], session_id=guide_id)
+            logger.debug(f"Research completed for guide_id: {guide_id}")
+            
+            # Store research results
+            logger.debug(f"Storing research results for guide_id: {guide_id}")
+            await db_service.store_research(research_results, guide_id)
+            logger.debug(f"Research results stored for guide_id: {guide_id}")
+            
+            return jsonify({"status": "success"})
+        except Exception as e:
+            logger.error(f"Error researching subtopic: {str(e)}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
     return app
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = create_app()
-    
-    # Get port from environment or use default
-    port = int(os.environ.get("PORT", 5000))
-    
-    print(f"Starting AI Council Guide Creation Website on port {port}...")
-    print(f"Open your browser and navigate to http://localhost:{port}/")
-    
-    # Enable debug mode for development
-    app.run(debug=True, host='0.0.0.0', port=port) 
+    app.run(debug=True) 

@@ -1,0 +1,173 @@
+/* Research Tree Styles */
+.research-tree-container {
+    position: relative;
+    width: 100%;
+    height: 400px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+
+.research-tree-container svg {
+    width: 100%;
+    height: 100%;
+}
+
+/* Tree Links */
+.link {
+    fill: none;
+    stroke: #ccc;
+    stroke-width: 2px;
+}
+
+/* Tree Nodes */
+.node circle {
+    fill: #fff;
+    stroke: #2196F3;
+    stroke-width: 2px;
+}
+
+.node.selected circle {
+    fill: #2196F3;
+    stroke: #1976D2;
+}
+
+.node text {
+    font-size: 12px;
+    font-family: sans-serif;
+}
+
+/* Node Status Colors */
+.node-circle.status-pending {
+    stroke: #FFA000;
+}
+
+.node-circle.status-in_progress {
+    stroke: #2196F3;
+}
+
+.node-circle.status-completed {
+    stroke: #4CAF50;
+}
+
+.node-circle.status-error {
+    stroke: #F44336;
+}
+
+/* Research Card Styles */
+.research-card-container {
+    margin-top: 20px;
+}
+
+.research-card-container .card {
+    border: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.research-card-container .card-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.research-card-container .card-header h3 {
+    margin: 0;
+    font-size: 1.5rem;
+    color: #2c3e50;
+}
+
+/* Timeline Styles */
+.timeline {
+    position: relative;
+    padding: 20px 0;
+}
+
+.timeline::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 20px;
+    height: 100%;
+    width: 2px;
+    background: #e9ecef;
+}
+
+.timeline-item {
+    position: relative;
+    padding-left: 50px;
+    margin-bottom: 20px;
+}
+
+.timeline-date {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 40px;
+    text-align: right;
+    font-size: 0.875rem;
+    color: #6c757d;
+}
+
+.timeline-content {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 4px;
+}
+
+.timeline-content h5 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+}
+
+/* Loading Overlay */
+.loading-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255,255,255,0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .research-tree-container {
+        height: 300px;
+    }
+    
+    .research-card-container .card-header h3 {
+        font-size: 1.25rem;
+    }
+    
+    .timeline-item {
+        padding-left: 40px;
+    }
+    
+    .timeline-date {
+        width: 30px;
+        font-size: 0.75rem;
+    }
+}
+
+/* Animation Classes */
+.fade-enter {
+    opacity: 0;
+}
+
+.fade-enter-active {
+    opacity: 1;
+    transition: opacity 300ms ease-in;
+}
+
+.fade-exit {
+    opacity: 1;
+}
+
+.fade-exit-active {
+    opacity: 0;
+    transition: opacity 300ms ease-in;
+} 
