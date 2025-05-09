@@ -13,7 +13,7 @@ from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_xai import ChatXAI
+from langchain_community.utilities import GoogleSearchAPIWrapper
 from .research_base import ResearchConfig, ResearchError
 
 # Configure logging
@@ -25,67 +25,103 @@ class AICouncilMember:
         self.name = name
         self.config = config
         self.chain = self._create_chain()
+        logger.debug(f"Initialized {name} council member")
         
     def _create_chain(self) -> LLMChain:
-        """Create LangChain chain for this member"""
-        if self.name == "claude":
-            llm = ChatAnthropic(
-                anthropic_api_key=self.config.anthropic_api_key,
-                model="claude-3-opus-20240229",
-                temperature=0.7,
-                max_tokens=4000
+        """Create the LangChain for this AI member"""
+        logger.debug(f"Creating chain for {self.name}")
+        try:
+            # Select the appropriate LLM based on AI member name
+            if self.name == "grok":
+                llm = ChatOpenAI(
+                    model="grok-beta",
+                    openai_api_base=self.config.OPENAI_API_BASE,
+                    api_key=self.config.XAI_API_KEY,
+                    temperature=0.7,
+                    max_tokens=2000
+                )
+            elif self.name == "claude":
+                llm = ChatAnthropic(
+                    api_key=self.config.anthropic_api_key,
+                    model="claude-3-opus-20240229",
+                    temperature=0.7,
+                    max_tokens=4000
+                )
+            elif self.name == "chatgpt":
+                llm = ChatOpenAI(
+                    api_key=self.config.openai_api_key,
+                    model="gpt-4-turbo-preview",
+                    temperature=0.7,
+                    max_tokens=4000
+                )
+            elif self.name == "gemini":
+                llm = ChatGoogleGenerativeAI(
+                    api_key=self.config.google_api_key,
+                    model="gemini-pro",
+                    temperature=0.7,
+                    max_tokens=4000
+                )
+            else:
+                raise ValueError(f"Unknown AI member: {self.name}")
+
+            # Create the research chain
+            research_chain = LLMChain(
+                llm=llm,
+                prompt=PromptTemplate(
+                    input_variables=["topic", "web_results"],
+                    template="""Analyze the following topic using the provided search results:
+
+Topic: {topic}
+
+Web Search Results:
+{web_results}
+
+Provide a comprehensive analysis in the following JSON format:
+{
+    "summary": "detailed summary",
+    "key_points": ["point 1", "point 2", ...],
+    "entities": [{"name": "entity name", "type": "entity type", "description": "..."}],
+    "timeline": [{"date": "YYYY-MM-DD", "event": "description"}],
+    "further_research": [{"topic": "subtopic", "reason": "why this needs research"}],
+    "references": [{"title": "source title", "url": "source url"}]
+}
+
+Ensure your response is ONLY the JSON object, with no additional text."""
+                ),
+                verbose=True
             )
-        elif self.name == "chatgpt":
-            llm = ChatOpenAI(
-                openai_api_key=self.config.openai_api_key,
-                model="gpt-4-turbo-preview",
-                temperature=0.7,
-                max_tokens=4000
-            )
-        elif self.name == "gemini":
-            llm = ChatGoogleGenerativeAI(
-                google_api_key=self.config.google_api_key,
-                model="gemini-pro",
-                temperature=0.7,
-                max_tokens=4000
-            )
-        elif self.name == "grok":
-            llm = ChatXAI(
-                xai_api_key=self.config.xai_api_key,
-                model="grok-2-1212",
-                temperature=0.7,
-                max_tokens=4000
-            )
-        else:
-            raise ValueError(f"Unknown AI member: {self.name}")
+
+            logger.debug(f"Chain created successfully for {self.name}")
+            return research_chain
+
+        except Exception as e:
+            logger.error(f"Failed to create chain for {self.name}: {str(e)}", exc_info=True)
+            raise ResearchError(f"Failed to create chain for {self.name}: {str(e)}")
             
-        prompt = PromptTemplate(
-            input_variables=["topic"],
-            template="""As an AI research assistant, analyze the following topic: {topic}
-            
-            Provide a comprehensive analysis including:
-            1. Summary
-            2. Key points
-            3. Important entities
-            4. Timeline of events
-            5. Areas for further research
-            6. References
-            
-            Format your response as a JSON object with these fields."""
-        )
-        
-        return LLMChain(
-            llm=llm,
-            prompt=prompt,
-            memory=ConversationBufferMemory(),
-            verbose=True
-        )
-        
     async def research(self, topic: str) -> Dict[str, Any]:
         """Conduct research using LangChain"""
         try:
-            # Run chain
-            result = await self.chain.arun(topic=topic)
+            logger.debug(f"{self.name} starting research for topic: {topic}")
+            
+            # Initialize Google Search
+            google_search = GoogleSearchAPIWrapper(
+                google_api_key=self.config.google_search_api_key,
+                google_cse_id=self.config.google_search_engine_id
+            )
+            
+            # Perform Google search
+            logger.debug("Running Google search")
+            web_results = await asyncio.to_thread(
+                google_search.run,
+                topic
+            )
+            
+            # Run the research chain
+            logger.debug(f"Running {self.name} research chain")
+            result = await self.chain.arun(
+                topic=topic,
+                web_results=web_results
+            )
             
             # Parse result
             try:
@@ -107,6 +143,13 @@ class AICouncilMember:
                     if field not in structured_data:
                         structured_data[field] = [] if field != "summary" else ""
                         
+                # Add web results to the response
+                structured_data["web_results"] = [
+                    {"title": r.split(" - ")[0].strip(), "url": r.split(" - ")[1].strip()}
+                    for r in web_results.split("\n")
+                    if " - " in r
+                ]
+                
                 return {
                     "ai_name": self.name,
                     "result": structured_data,
@@ -119,7 +162,7 @@ class AICouncilMember:
                 raise ResearchError(f"Failed to parse {self.name} response as JSON")
                 
         except Exception as e:
-            logger.error(f"{self.name} research failed: {str(e)}")
+            logger.error(f"{self.name} research failed: {str(e)}", exc_info=True)
             raise ResearchError(f"{self.name} research failed: {str(e)}")
 
 class AICouncil:

@@ -6,45 +6,54 @@ from datetime import datetime
 import os
 from typing import Dict, Any
 from quart_cors import cors
-from config import Config, MONGO_URI, MONGO_DB_NAME, XAI_API_KEY
-import logging
+from config import Config as AppCustomConfig # Your custom config class from src/config.py
+import logging # Ensure logging is imported if logger is used
 from pathlib import Path
 
 from src.langchain.chains.ai_council import AICouncil, AICouncilMember
 from src.langchain.chains.research_services import MongoDBService
 from src.langchain.chains.research_base import ResearchConfig
+from src.backend.blueprints.research import research_bp
 
-def create_app(config_class=Config):
-    """Create and configure the Quart application"""
-    # Get the absolute path to the src directory
+# No need to set Quart.config_class as we're monkey-patching Quart's Config class directly
+# in config.py before any Quart app is instantiated
+
+def create_app():
+    print("[DEBUG app.py] create_app called.")
     src_dir = Path(__file__).parent
     
+    print("[DEBUG app.py] About to instantiate Quart app.")
     app = Quart(__name__,
                 static_folder=src_dir / 'frontend' / 'static',
                 template_folder=src_dir / 'frontend' / 'templates')
+    print("[DEBUG app.py] Quart app instantiated.")
     
-    # Instantiate the config class
-    config = config_class()
-    app.config.from_object(config)
-    cors(app)
+    # Load our custom config
+    app.config.from_object(AppCustomConfig())
+    print(f"[DEBUG app.py] Custom config loaded, PROVIDE_AUTOMATIC_OPTIONS: {app.config.get('PROVIDE_AUTOMATIC_OPTIONS')}")
+    
+    cors(app, 
+     allow_origin="*", 
+     allow_methods=["GET", "POST", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"],
+     expose_headers=["Content-Type", "Authorization"],
+     max_age=3600,
+     send_origin_wildcard=True)
+    print("[DEBUG app.py] CORS configured.")
 
-    # Initialize configuration
-    config = ResearchConfig.from_config(app)
-
-    # Initialize database service using MongoDBService
-    db_service = MongoDBService(config)
-
-    # Initialize AI Council with config
-    council = AICouncil(config)
-
-    # Enable Grok member (it's already enabled by default, but being explicit)
+    # Initialize service infrastructure
+    research_config_instance = ResearchConfig.from_config()
+    db_service = MongoDBService(research_config_instance) 
+    council = AICouncil(research_config_instance)
     council.enable_member("grok")
-
     logger = logging.getLogger(__name__)
+    print("[DEBUG app.py] Services initialized.")
+
+    app.register_blueprint(research_bp, url_prefix='/research_bp')
+    print("[DEBUG app.py] Blueprint registered.")
 
     @app.route("/")
     async def index():
-        """Serve the main index page"""
         return await render_template("index.html")
 
     @app.route("/research")
@@ -106,7 +115,7 @@ def create_app(config_class=Config):
         # Create session in database
         logger.debug(f"Creating research session for topic: {data['topic']}")
         session_id = await db_service.store_research({
-            "topic": data["topic"],
+            "topic": data['topic'],
             "status": "initializing",
             "metadata": {
                 "created": datetime.utcnow(),
@@ -119,19 +128,20 @@ def create_app(config_class=Config):
         
         # Start research
         logger.debug(f"Starting research for session {session_id}")
-        research_results = await council.conduct_research(data["topic"], session_id=session_id)
+        research_results_obj = await council.conduct_research(data["topic"], session_id=session_id)
         logger.debug(f"Research completed for session {session_id}")
         
         # Store research results
         logger.debug(f"Storing research results for session {session_id}")
-        await db_service.store_research(research_results, session_id)
+        # Assuming conduct_research returns an object that can be converted to dict or is already a dict
+        await db_service.store_research(research_results_obj.to_dict() if hasattr(research_results_obj, 'to_dict') else research_results_obj, session_id)
         logger.debug(f"Research results stored for session {session_id}")
         
         return jsonify({"guide_id": session_id})
 
     @app.route("/api/research/results/<guide_id>", methods=["GET"])
-    async def get_research_results(guide_id: str):
-        """Get research results for a guide"""
+    async def get_research_results_api(guide_id: str): # Renamed to avoid conflict with other get_research_results
+        """Get research results for a guide via API"""
         try:
             # Get guide data
             logger.debug(f"Getting guide data for guide_id: {guide_id}")
@@ -164,8 +174,8 @@ def create_app(config_class=Config):
             return jsonify({"error": str(e)}), 500
 
     @app.route("/api/research/initialize/<guide_id>", methods=["POST"])
-    async def initialize_research(guide_id: str):
-        """Initialize research for a guide"""
+    async def initialize_research_api(guide_id: str): # Renamed for clarity
+        """Initialize research for a guide via API"""
         try:
             # Get guide data
             logger.debug(f"Getting guide data for guide_id: {guide_id}")
@@ -176,12 +186,12 @@ def create_app(config_class=Config):
                 
             # Start research
             logger.debug(f"Starting research for guide_id: {guide_id}")
-            research_results = await council.conduct_research(guide["topic"], session_id=guide_id)
+            research_results_obj = await council.conduct_research(guide["topic"], session_id=guide_id)
             logger.debug(f"Research completed for guide_id: {guide_id}")
             
             # Store research results
             logger.debug(f"Storing research results for guide_id: {guide_id}")
-            await db_service.store_research(research_results, guide_id)
+            await db_service.store_research(research_results_obj.to_dict() if hasattr(research_results_obj, 'to_dict') else research_results_obj, guide_id)
             logger.debug(f"Research results stored for guide_id: {guide_id}")
             
             return jsonify({"status": "success"})
@@ -190,38 +200,38 @@ def create_app(config_class=Config):
             return jsonify({"error": str(e)}), 500
 
     @app.route("/api/research/<guide_id>/subtopics", methods=["POST"])
-    async def research_subtopic(guide_id: str):
-        """Research a subtopic"""
+    async def research_subtopic_api(guide_id: str):
         try:
             data = await request.get_json()
             if not data or "topic" not in data:
-                logger.error("No topic provided in request")
                 return jsonify({"error": "Topic is required"}), 400
-                
-            # Get guide data
-            logger.debug(f"Getting guide data for guide_id: {guide_id}")
             guide = await db_service.get_guide(guide_id)
             if not guide:
-                logger.error(f"Guide not found: {guide_id}")
                 return jsonify({"error": "Guide not found"}), 404
-                
-            # Start research
-            logger.debug(f"Starting research for guide_id: {guide_id}")
-            research_results = await council.conduct_research(data["topic"], session_id=guide_id)
-            logger.debug(f"Research completed for guide_id: {guide_id}")
-            
-            # Store research results
-            logger.debug(f"Storing research results for guide_id: {guide_id}")
-            await db_service.store_research(research_results, guide_id)
-            logger.debug(f"Research results stored for guide_id: {guide_id}")
-            
-            return jsonify({"status": "success"})
+            subtopic_session_id = await db_service.store_research({
+                "topic": data['topic'],
+                "parent_guide_id": guide_id, 
+                "status": "initializing",
+                "metadata": {"created": datetime.utcnow(), "updated": datetime.utcnow()},
+                "research": {},
+                "children": []
+            })
+            research_results_obj = await council.conduct_research(data["topic"], session_id=subtopic_session_id)
+            await db_service.store_research(research_results_obj.to_dict() if hasattr(research_results_obj, 'to_dict') else research_results_obj, subtopic_session_id)
+            await db_service.add_child_to_guide(parent_guide_id=guide_id, child_guide_id=subtopic_session_id)
+            return jsonify({"status": "success", "subtopic_guide_id": subtopic_session_id})
         except Exception as e:
-            logger.error(f"Error researching subtopic: {str(e)}", exc_info=True)
             return jsonify({"error": str(e)}), 500
 
+    print("[DEBUG app.py] create_app finished.")
     return app
 
 if __name__ == "__main__":
+    print("[DEBUG app.py] Starting __main__ block.")
     app = create_app()
-    app.run(debug=True) 
+    print(f"[DEBUG app.py] Final app.config before run, PROVIDE_AUTOMATIC_OPTIONS: {app.config.get('PROVIDE_AUTOMATIC_OPTIONS')}")
+    app.run(debug=True, use_reloader=True)
+
+    # Use a production-ready ASGI server like Hypercorn directly for Quart in production
+    # For development, app.run() is okay but ensure it's using an ASGI loop.
+    # Quart's app.run() by default tries to use Hypercorn if available. 

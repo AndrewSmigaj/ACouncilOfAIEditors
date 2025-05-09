@@ -5,7 +5,11 @@ import os
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Protocol
 from dataclasses import dataclass
-from flask import Flask
+from config import (
+    OPENAI_KEY, XAI_API_KEY, GEMINI_API_KEY,
+    GOOGLE_SEARCH_API_KEY, GOOGLE_SEARCH_ENGINE_ID,
+    MONGO_URI, OPENAI_API_BASE
+)
 
 # Custom Exceptions
 class ResearchError(Exception): 
@@ -31,28 +35,30 @@ class ResearchConfig:
     openai_api_key: str
     anthropic_api_key: str
     google_api_key: str  # This is for Gemini
-    xai_api_key: str
+    XAI_API_KEY: str  # Changed to uppercase to match usage in ai_council.py
     google_search_api_key: str  # This is for Google Search
     google_search_engine_id: str
     mongo_connection: str
+    OPENAI_API_BASE: str  # Uppercase to match usage in ai_council.py
     research_timeout: int = 300  # 5 minutes default timeout
     max_retries: int = 3  # Maximum number of retries for failed requests
     retry_delay: int = 2  # Base delay between retries in seconds
     
     @classmethod
-    def from_config(cls, app: Flask) -> 'ResearchConfig':
-        """Create config from Flask config"""
+    def from_config(cls) -> 'ResearchConfig':
+        """Create config from config.py values"""
         return cls(
-            openai_api_key=app.config.get("OPENAI_API_KEY", ""),
-            anthropic_api_key=app.config.get("ANTHROPIC_API_KEY", ""),
-            google_api_key=app.config.get("GEMINI_API_KEY", ""),  # For Gemini AI
-            xai_api_key=app.config.get("XAI_API_KEY", ""),
-            google_search_api_key=app.config.get("GOOGLE_SEARCH_API_KEY", ""),  # For Google Search
-            google_search_engine_id=app.config.get("GOOGLE_SEARCH_ENGINE_ID", ""),
-            mongo_connection=app.config.get("MONGODB_URI", "mongodb://localhost:27017"),
-            research_timeout=int(app.config.get('RESEARCH_TIMEOUT', '300')),
-            max_retries=int(app.config.get('MAX_RETRIES', '3')),
-            retry_delay=int(app.config.get('RETRY_DELAY', '2'))
+            openai_api_key=OPENAI_KEY,
+            anthropic_api_key="",  # Add if needed
+            google_api_key=GEMINI_API_KEY,
+            XAI_API_KEY=XAI_API_KEY,  # Changed to uppercase to match usage
+            google_search_api_key=GOOGLE_SEARCH_API_KEY,
+            google_search_engine_id=GOOGLE_SEARCH_ENGINE_ID,
+            mongo_connection=MONGO_URI,
+            OPENAI_API_BASE=OPENAI_API_BASE,
+            research_timeout=300,  # Default values
+            max_retries=3,
+            retry_delay=2
         )
 
 @dataclass
