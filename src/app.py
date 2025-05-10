@@ -49,7 +49,7 @@ def create_app():
     logger = logging.getLogger(__name__)
     print("[DEBUG app.py] Services initialized.")
 
-    app.register_blueprint(research_bp, url_prefix='/research_bp')
+    app.register_blueprint(research_bp, url_prefix='/api')
     print("[DEBUG app.py] Blueprint registered.")
 
     @app.route("/")
@@ -67,39 +67,21 @@ def create_app():
         logger.debug(f"Attempting to get research for guide_id: {guide_id}")
         
         try:
-            # Get guide data from guides collection
+            # Check if guide exists
             logger.debug(f"Looking up guide in guides collection: {guide_id}")
             guide = await db_service.get_guide(guide_id)
-            logger.debug(f"Guide lookup result: {guide}")
             
             if not guide:
                 logger.error(f"Guide not found in guides collection: {guide_id}")
-                return jsonify({"error": "Guide not found"}), 404
+                return "Guide not found", 404
             
-            # Get research results
-            logger.debug(f"Getting research results for guide_id: {guide_id}")
-            results = await db_service.get_research_results(guide_id)
-            logger.debug(f"Research results lookup result: {results}")
+            # Render the template with guide_id
+            logger.debug(f"Rendering research.html template for guide_id: {guide_id}")
+            return await render_template("research.html", guide_id=guide_id)
             
-            if not results:
-                logger.debug(f"No research results found for guide_id: {guide_id}, returning initializing state")
-                return jsonify({
-                    "status": "initializing",
-                    "research": {
-                        "topic": guide["topic"],
-                        "children": [],
-                        "research_results": {}
-                    }
-                })
-            
-            logger.debug(f"Returning completed research results for guide_id: {guide_id}")
-            return jsonify({
-                "status": "completed",
-                "research": results
-            })
         except Exception as e:
             logger.error(f"Error getting guide research: {str(e)}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return f"Error: {str(e)}", 500
 
     @app.route("/api/research", methods=["POST"])
     async def create_research():
@@ -157,17 +139,15 @@ def create_app():
                 logger.debug(f"No research results found for guide_id: {guide_id}, returning initializing state")
                 return jsonify({
                     "status": "initializing",
-                    "research": {
-                        "topic": guide["topic"],
-                        "children": [],
-                        "research_results": {}
-                    }
+                    "topic": guide["topic"],
+                    "trees": {}
                 })
                 
             logger.debug(f"Returning completed research results for guide_id: {guide_id}")
             return jsonify({
                 "status": "completed",
-                "research": results
+                "topic": guide["topic"],
+                "trees": results.get("trees", {})
             })
         except Exception as e:
             logger.error(f"Error getting research results: {str(e)}", exc_info=True)
@@ -205,23 +185,56 @@ def create_app():
             data = await request.get_json()
             if not data or "topic" not in data:
                 return jsonify({"error": "Topic is required"}), 400
+                
+            if "ai" not in data:
+                return jsonify({"error": "AI identifier is required"}), 400
+                
+            if "parent_node_id" not in data:
+                return jsonify({"error": "Parent node ID is required"}), 400
+                
             guide = await db_service.get_guide(guide_id)
             if not guide:
                 return jsonify({"error": "Guide not found"}), 404
+                
+            # Create a new research session for the subtopic
             subtopic_session_id = await db_service.store_research({
                 "topic": data['topic'],
                 "parent_guide_id": guide_id, 
                 "status": "initializing",
                 "metadata": {"created": datetime.utcnow(), "updated": datetime.utcnow()},
-                "research": {},
-                "children": []
+                "trees": {}
             })
+            
+            # Enable only the specified AI for research
+            for member_name in council.members:
+                council.members[member_name]["enabled"] = (member_name == data["ai"])
+                
+            # Conduct research
             research_results_obj = await council.conduct_research(data["topic"], session_id=subtopic_session_id)
+            
+            # Store research results
             await db_service.store_research(research_results_obj.to_dict() if hasattr(research_results_obj, 'to_dict') else research_results_obj, subtopic_session_id)
-            await db_service.add_child_to_guide(parent_guide_id=guide_id, child_guide_id=subtopic_session_id)
-            return jsonify({"status": "success", "subtopic_guide_id": subtopic_session_id})
+            
+            # Create node with generated results
+            ai_results = research_results_obj.get("trees", {}).get(data["ai"], {})
+            new_node = {
+                "node_id": subtopic_session_id,
+                "topic": data["topic"],
+                "status": "completed",
+                "research": ai_results.get("research", {}),
+                "children": []
+            }
+            
+            # Add node to parent's children
+            await db_service.add_subtopic_node(guide_id, data["ai"], data["parent_node_id"], new_node)
+            
+            return jsonify({
+                "status": "success", 
+                "node": new_node
+            })
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            logger.error(f"Error researching subtopic: {str(e)}", exc_info=True)
+            return jsonify({"error": str(e), "status": "error"}), 500
 
     print("[DEBUG app.py] create_app finished.")
     return app

@@ -12,7 +12,10 @@
     <div class="row">
         <div class="col-12">
             {% if guide_id %}
-                <div id="research-container" data-guide-id="{{ guide_id }}"></div>
+                <div class="research-container" data-guide-id="{{ guide_id }}">
+                    <div id="trees-row" class="row mb-4"></div>
+                    <div id="research-card" class="card"></div>
+                </div>
             {% else %}
                 <div class="card">
                     <div class="card-body">
@@ -41,14 +44,115 @@
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="{{ url_for('static', filename='js/research-tree.js') }}"></script>
 <script src="{{ url_for('static', filename='js/research-card.js') }}"></script>
-<script src="{{ url_for('static', filename='js/research-container.js') }}"></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        const container = document.getElementById('research-container');
+        const container = document.querySelector('.research-container');
         if (container) {
             const guideId = container.dataset.guideId;
-            const researchContainer = new ResearchContainer('research-container', guideId);
-            researchContainer.initialize();
+            
+            // Fetch research data
+            fetch(`/api/research/results/${guideId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'error') {
+                        throw new Error(data.message);
+                    }
+                    
+                    if (data.trees) {
+                        // Display trees for each AI
+                        Object.entries(data.trees).forEach(([ai, root]) => {
+                            // Create a column for this AI's tree
+                            const col = document.createElement('div');
+                            col.className = 'col-md-4';
+                            col.id = `tree-col-${ai}`;
+                            
+                            const header = document.createElement('h3');
+                            header.textContent = `${ai.toUpperCase()} Research`;
+                            col.appendChild(header);
+                            
+                            const treeDiv = document.createElement('div');
+                            treeDiv.id = `tree-${ai}`;
+                            treeDiv.className = 'tree-container';
+                            col.appendChild(treeDiv);
+                            
+                            document.getElementById('trees-row').appendChild(col);
+                            
+                            // Initialize the tree
+                            const tree = new ResearchTree(`tree-${ai}`);
+                            tree.initializeWithData(root);
+                            
+                            // Handle node selection
+                            tree.on('nodeSelected', node => {
+                                // Show the research card
+                                const card = new ResearchCard('research-card');
+                                card.updateContent({
+                                    ai: ai,
+                                    topic: node.topic,
+                                    ...node.research
+                                });
+                                
+                                // Set up the explore further button handler
+                                card.on('researchRequested', topic => {
+                                    // Call the subtopic API to research this topic
+                                    fetch('/api/research/subtopic', {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json'
+                                        },
+                                        body: JSON.stringify({
+                                            topic: topic.topic,
+                                            ai: ai,
+                                            guide_id: guideId,
+                                            parent_node_id: node.node_id
+                                        })
+                                    })
+                                    .then(response => response.json())
+                                    .then(result => {
+                                        if (result.status === 'success') {
+                                            // Add the new node to the tree
+                                            tree.addNode(result.node);
+                                            
+                                            // Show the new node's research
+                                            card.updateContent({
+                                                ai: ai,
+                                                topic: result.node.topic,
+                                                ...result.node.research
+                                            });
+                                        } else {
+                                            alert('Error: ' + result.message);
+                                        }
+                                    })
+                                    .catch(error => {
+                                        console.error('Error:', error);
+                                        alert('Failed to research subtopic');
+                                    });
+                                });
+                            });
+                        });
+                        
+                        // Show the first AI's root node research by default
+                        const firstAI = Object.keys(data.trees)[0];
+                        const firstRoot = data.trees[firstAI];
+                        const card = new ResearchCard('research-card');
+                        card.updateContent({
+                            ai: firstAI,
+                            topic: firstRoot.topic,
+                            ...firstRoot.research
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading research data:', error);
+                    document.getElementById('research-card').innerHTML = `
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="alert alert-danger">
+                                    Failed to load research data: ${error.message}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
         }
     });
 </script>

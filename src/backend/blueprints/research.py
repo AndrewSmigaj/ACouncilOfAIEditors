@@ -37,58 +37,55 @@ async def handle_error(error):
 
 @research_bp.route('/', methods=['POST'])
 async def start_research():
-    """
-    Start the research process for a given topic
-    Uses LangChain orchestration with Google Search and Grok DeepSearch
-    """
-    logger.debug("Starting research process")
+    """Start research"""
     try:
-        # Get request data
         data = await request.get_json()
-        logger.debug(f"Received request data: {data}")
+        topic = data.get('topic')
         
-        if not data or 'topic' not in data:
-            logger.error("No topic provided in request")
+        if not topic:
             return jsonify({
-                "status": "error",
-                "message": "Topic is required"
+                'status': 'error',
+                'message': 'Topic is required'
             }), 400
+            
+        # Configure research
+        from ...config import (
+            OPENAI_KEY, OPENAI_API_BASE, 
+            GOOGLE_SEARCH_API_KEY, GOOGLE_SEARCH_ENGINE_ID,
+            GEMINI_API_KEY, XAI_API_KEY, MONGO_URI
+        )
+        from ...langchain.chains.research_base import ResearchConfig
         
-        topic = data['topic']
-        parent_id = data.get('parent_id')
-        logger.debug(f"Processing topic: {topic}, parent_id: {parent_id}")
+        # Create research config
+        research_config = ResearchConfig(
+            openai_api_key=OPENAI_KEY,
+            anthropic_api_key="",
+            google_api_key=GEMINI_API_KEY,
+            XAI_API_KEY=XAI_API_KEY,
+            google_search_api_key=GOOGLE_SEARCH_API_KEY,
+            google_search_engine_id=GOOGLE_SEARCH_ENGINE_ID,
+            mongo_connection=MONGO_URI,
+            OPENAI_API_BASE=OPENAI_API_BASE
+        )
         
-        # Enhanced validation
-        validation_error = validate_topic(topic)
-        if validation_error:
-            logger.error(f"Topic validation failed: {validation_error}")
-            return jsonify({
-                "status": "error",
-                "message": validation_error
-            }), 400
+        # Initialize research service
+        research_service = ResearchService(research_config)
         
-        # Create a new guide document with initial status
+        # Create guide
         db = get_database()
-        guide = {
+        logger.debug(f"Creating new guide for topic: {topic}")
+        result = await db.guides.insert_one({
             "topic": topic,
-            "parent_id": parent_id,
             "status": "initializing",
             "metadata": {
                 "created": datetime.utcnow(),
                 "updated": datetime.utcnow(),
-                "ais": ["Claude", "ChatGPT", "Gemini", "Grok"],
-                "depth": 0 if not parent_id else await get_topic_depth(db, parent_id) + 1
-            },
-            "ai_interactions": []
-        }
-        
-        logger.debug(f"Creating new guide document: {json.dumps(guide, default=str)}")
-        result = await db.guides.insert_one(guide)
+                "ais": ["grok"],  # Initially only Grok is enabled
+                "depth": 0
+            }
+        })
         guide_id = str(result.inserted_id)
         logger.debug(f"Created guide with ID: {guide_id}")
-        
-        # Initialize research service
-        research_service = ResearchService(ResearchConfig.from_config())
         
         # Run research
         logger.debug(f"Starting research for guide_id: {guide_id}")
@@ -102,7 +99,7 @@ async def start_research():
             {
                 "$set": {
                     "status": "completed",
-                    "research": research.to_dict(),
+                    "trees": research.get("trees", {}),
                     "metadata.updated": datetime.utcnow()
                 }
             }
@@ -111,8 +108,7 @@ async def start_research():
         
         return jsonify({
             "status": "success",
-            "guide_id": guide_id,
-            "research": research.to_dict()
+            "guide_id": guide_id
         })
         
     except Exception as e:
@@ -122,127 +118,105 @@ async def start_research():
             "message": str(e)
         }), 500
 
-@research_bp.route('/research', methods=['POST'])
-async def initialize_research_document():
-    """Initialize a new research document"""
-    try:
-        data = await request.get_json()
-        topic = data.get('topic')
-        guide_id = data.get('guide_id')
-        parent_id = data.get('parent_id')
+# @research_bp.route('/research/results/<guide_id>', methods=['GET'])
+# async def get_research_results(guide_id):
+#     """Get research results"""
+#     try:
+#         db = get_database()
+#         guide = await db.guides.find_one({"_id": ObjectId(guide_id)})
         
-        if not topic:
-            return jsonify({
-                'status': 'error',
-                'message': 'Topic is required'
-            }), 400
+#         if not guide:
+#             return jsonify({
+#                 'status': 'error',
+#                 'message': 'Guide not found'
+#             }), 404
             
-        # Create research chain
-        research_chain = await create_research_chain()
+#         # Return trees for new format or research for legacy
+#         result = {
+#             "status": guide.get("status", "completed"),
+#         }
         
-        # Run research
-        research_results = await research_chain.run(topic, "")
-        
-        # Create research result
-        research = ResearchResult(
-            summary=research_results["summary"],
-            key_points=research_results["key_points"],
-            entities=research_results["entities"],
-            subtopics=research_results["subtopics"],
-            timeline=research_results["timeline"],
-            further_research=research_results["further_research"],
-            references=research_results["references"],
-            web_results=research_results.get("web_results", [])
-        )
-        
-        # Update parent if exists
-        if parent_id:
-            db = get_database()
-            await db.guides.update_one(
-                {"_id": ObjectId(parent_id)},
-                {"$push": {"children": guide_id}}
-            )
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'Research completed successfully',
-            'research': research.to_dict()
-        })
+#         if "trees" in guide:
+#             result["trees"] = guide["trees"]
+#         elif "research" in guide:
+#             result["research"] = guide["research"]
             
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+#         return jsonify(result)
+            
+#     except Exception as e:
+#         return jsonify({
+#             'status': 'error',
+#             'message': str(e)
+#         }), 500
 
-@research_bp.route('/research/subtopic', methods=['POST'])
-async def research_subtopic():
-    """Research a subtopic"""
-    try:
-        data = await request.get_json()
-        topic = data.get('topic')
-        parent_topic = data.get('parent_topic')
-        guide_id = data.get('guide_id')
+# @research_bp.route('/research/subtopic', methods=['POST'])
+# async def research_subtopic():
+#     """Research a subtopic"""
+#     try:
+#         data = await request.get_json()
+#         topic = data.get('topic')
+#         ai = data.get('ai')
+#         guide_id = data.get('guide_id')
+#         parent_node_id = data.get('parent_node_id')
         
-        if not topic or not parent_topic:
-            return jsonify({
-                'status': 'error',
-                'message': 'Topic and parent topic are required'
-            }), 400
+#         if not all([topic, ai, guide_id, parent_node_id]):
+#             return jsonify({
+#                 'status': 'error',
+#                 'message': 'Topic, AI, guide_id, and parent_node_id are required'
+#             }), 400
             
-        # Create research chain
-        research_chain = await create_research_chain()
+#         # Configure research
+#         from ...config import (
+#             OPENAI_KEY, OPENAI_API_BASE, 
+#             GOOGLE_SEARCH_API_KEY, GOOGLE_SEARCH_ENGINE_ID,
+#             GEMINI_API_KEY, XAI_API_KEY, MONGO_URI
+#         )
+#         from ...langchain.chains.research_base import ResearchConfig
         
-        # Run research
-        research_results = await research_chain.run(topic, "")
+#         # Create research config
+#         research_config = ResearchConfig(
+#             openai_api_key=OPENAI_KEY,
+#             anthropic_api_key="",
+#             google_api_key=GEMINI_API_KEY,
+#             XAI_API_KEY=XAI_API_KEY,
+#             google_search_api_key=GOOGLE_SEARCH_API_KEY,
+#             google_search_engine_id=GOOGLE_SEARCH_ENGINE_ID,
+#             mongo_connection=MONGO_URI,
+#             OPENAI_API_BASE=OPENAI_API_BASE
+#         )
         
-        # Create research result
-        research = ResearchResult(
-            summary=research_results["summary"],
-            key_points=research_results["key_points"],
-            entities=research_results["entities"],
-            subtopics=research_results["subtopics"],
-            timeline=research_results["timeline"],
-            further_research=research_results["further_research"],
-            references=research_results["references"],
-            web_results=research_results.get("web_results", [])
-        )
+#         # Initialize research service
+#         research_service = ResearchService(research_config)
         
-        return jsonify({
-            'status': 'success',
-            'message': 'Subtopic research completed successfully',
-            'research': research.to_dict()
-        })
+#         # Run research for the subtopic
+#         new_node = await research_service.research_subtopic(topic, ai, guide_id, parent_node_id)
+        
+#         # Add new node to the tree
+#         db_service = research_service.db_service
+#         success = await db_service.add_subtopic_node(guide_id, ai, parent_node_id, new_node)
+        
+#         if not success:
+#             return jsonify({
+#                 'status': 'error',
+#                 'message': 'Failed to add subtopic node to tree'
+#             }), 500
             
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+#         return jsonify({
+#             'status': 'success',
+#             'message': 'Subtopic research completed successfully',
+#             'node': new_node
+#         })
+            
+#     except Exception as e:
+#         return jsonify({
+#             'status': 'error',
+#             'message': str(e)
+#         }), 500
 
-@research_bp.route('/results/<guide_id>', methods=['GET'])
-async def get_research_results(guide_id: str):
-    """Get research results for a guide"""
-    try:
-        db = get_database()
-        guide = await db.guides.find_one({"_id": ObjectId(guide_id)})
-        
-        if not guide:
-            return jsonify({
-                'status': 'error',
-                'message': 'Guide not found'
-            }), 404
-            
-        return jsonify({
-            'status': 'success',
-            'research': guide.get('research', {})
-        })
-            
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+@research_bp.route('/guide/<id>/research', methods=['GET'])
+async def render_research_page(id):
+    """Render the research page"""
+    return await render_template("research.html", guide_id=id)
 
 @research_bp.route('/topics/<topic_id>/research', methods=['POST'])
 async def start_topic_research(topic_id):
@@ -439,96 +413,96 @@ async def get_topic_tree():
             'message': str(e)
         }), 500
 
-@research_bp.route('/<guide_id>/subtopics', methods=['POST'])
-async def research_subtopics(guide_id: str):
-    """Research subtopics for a guide"""
-    try:
-        data = await request.get_json()
-        subtopics = data.get('subtopics', [])
+# @research_bp.route('/<guide_id>/subtopics', methods=['POST'])
+# async def research_subtopics(guide_id: str):
+#     """Research subtopics for a guide"""
+#     try:
+#         data = await request.get_json()
+#         subtopics = data.get('subtopics', [])
         
-        if not subtopics:
-            return jsonify({
-                'status': 'error',
-                'message': 'No subtopics provided'
-            }), 400
+#         if not subtopics:
+#             return jsonify({
+#                 'status': 'error',
+#                 'message': 'No subtopics provided'
+#             }), 400
             
-        db = get_database()
-        guide = await db.guides.find_one({"_id": ObjectId(guide_id)})
+#         db = get_database()
+#         guide = await db.guides.find_one({"_id": ObjectId(guide_id)})
         
-        if not guide:
-            return jsonify({
-                'status': 'error',
-                'message': 'Guide not found'
-            }), 404
+#         if not guide:
+#             return jsonify({
+#                 'status': 'error',
+#                 'message': 'Guide not found'
+#             }), 404
             
-        # Initialize research service
-        research_service = ResearchService(ResearchConfig.from_config())
+#         # Initialize research service
+#         research_service = ResearchService(ResearchConfig.from_config())
         
-        # Research each subtopic
-        results = []
-        for subtopic in subtopics:
-            try:
-                # Create subtopic guide
-                subtopic_guide = {
-                    "topic": subtopic,
-                    "parent_id": guide_id,
-                    "status": "initializing",
-                    "metadata": {
-                        "created": datetime.utcnow(),
-                        "updated": datetime.utcnow(),
-                        "ais": ["Claude", "ChatGPT", "Gemini", "Grok"],
-                        "depth": guide.get("metadata", {}).get("depth", 0) + 1
-                    }
-                }
+#         # Research each subtopic
+#         results = []
+#         for subtopic in subtopics:
+#             try:
+#                 # Create subtopic guide
+#                 subtopic_guide = {
+#                     "topic": subtopic,
+#                     "parent_id": guide_id,
+#                     "status": "initializing",
+#                     "metadata": {
+#                         "created": datetime.utcnow(),
+#                         "updated": datetime.utcnow(),
+#                         "ais": ["Claude", "ChatGPT", "Gemini", "Grok"],
+#                         "depth": guide.get("metadata", {}).get("depth", 0) + 1
+#                     }
+#                 }
                 
-                result = await db.guides.insert_one(subtopic_guide)
-                subtopic_id = str(result.inserted_id)
+#                 result = await db.guides.insert_one(subtopic_guide)
+#                 subtopic_id = str(result.inserted_id)
                 
-                # Run research
-                research = await research_service.research_topic(subtopic, subtopic_id)
+#                 # Run research
+#                 research = await research_service.research_topic(subtopic, subtopic_id)
                 
-                # Update guide with research results
-                await db.guides.update_one(
-                    {"_id": ObjectId(subtopic_id)},
-                    {
-                        "$set": {
-                            "status": "completed",
-                            "research": research.to_dict(),
-                            "metadata.updated": datetime.utcnow()
-                        }
-                    }
-                )
+#                 # Update guide with research results
+#                 await db.guides.update_one(
+#                     {"_id": ObjectId(subtopic_id)},
+#                     {
+#                         "$set": {
+#                             "status": "completed",
+#                             "research": research.to_dict(),
+#                             "metadata.updated": datetime.utcnow()
+#                         }
+#                     }
+#                 )
                 
-                # Add to parent's children
-                await db.guides.update_one(
-                    {"_id": ObjectId(guide_id)},
-                    {"$push": {"children": subtopic_id}}
-                )
+#                 # Add to parent's children
+#                 await db.guides.update_one(
+#                     {"_id": ObjectId(guide_id)},
+#                     {"$push": {"children": subtopic_id}}
+#                 )
                 
-                results.append({
-                    "subtopic": subtopic,
-                    "guide_id": subtopic_id,
-                    "status": "success"
-                })
+#                 results.append({
+#                     "subtopic": subtopic,
+#                     "guide_id": subtopic_id,
+#                     "status": "success"
+#                 })
                 
-            except Exception as e:
-                logger.error(f"Failed to research subtopic {subtopic}: {str(e)}", exc_info=True)
-                results.append({
-                    "subtopic": subtopic,
-                    "status": "error",
-                    "error": str(e)
-                })
+#             except Exception as e:
+#                 logger.error(f"Failed to research subtopic {subtopic}: {str(e)}", exc_info=True)
+#                 results.append({
+#                     "subtopic": subtopic,
+#                     "status": "error",
+#                     "error": str(e)
+#                 })
         
-        return jsonify({
-            'status': 'success',
-            'results': results
-        })
+#         return jsonify({
+#             'status': 'success',
+#             'results': results
+#         })
             
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+#     except Exception as e:
+#         return jsonify({
+#             'status': 'error',
+#             'message': str(e)
+#         }), 500
 
 @research_bp.route('/<guide_id>', methods=['GET'])
 async def research_page(guide_id: str):

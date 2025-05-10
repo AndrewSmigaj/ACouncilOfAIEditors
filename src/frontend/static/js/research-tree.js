@@ -69,6 +69,56 @@ class ResearchTree {
         }
     }
     
+    /**
+     * Initialize the tree with the provided data without HTTP calls
+     * @param {Object} nodeData - The node data for the tree
+     */
+    initializeWithData(nodeData) {
+        if (!nodeData) {
+            console.warn('No data provided to initialize tree');
+            return;
+        }
+        
+        console.log('Initializing tree with data:', nodeData);
+        
+        // Convert node data to tree data format
+        this.treeData = this._buildTreeDataFromNode(nodeData);
+        
+        // Render tree
+        this._renderTree();
+    }
+    
+    /**
+     * Build tree data from a node object in the new format
+     * @param {Object} node - The node object with node_id, topic, status, children, etc.
+     */
+    _buildTreeDataFromNode(node) {
+        if (!node) {
+            console.warn('No node provided to build tree');
+            return null;
+        }
+        
+        // Create root node
+        const root = {
+            id: node.node_id,
+            name: node.topic,
+            status: node.status,
+            topic: node.topic,
+            node_id: node.node_id,
+            research: node.research,
+            children: []
+        };
+        
+        // Add children if available
+        if (node.children && node.children.length > 0) {
+            root.children = node.children.map(child => 
+                this._buildTreeDataFromNode(child)
+            );
+        }
+        
+        return root;
+    }
+    
     updateData(data) {
         if (!data) {
             console.warn('No data provided to update tree');
@@ -175,7 +225,7 @@ class ResearchTree {
     
     _handleNodeClick(nodeData) {
         this.setSelectedNode(nodeData.id);
-        this._emit('nodeSelected', nodeData.id);
+        this._emit('nodeSelected', nodeData);
     }
     
     setSelectedNode(nodeId) {
@@ -206,14 +256,13 @@ class ResearchTree {
     addNode(nodeData) {
         if (!this.treeData) return;
         
-        // Add node to tree data
-        const newNode = {
-            id: nodeData.id,
-            name: nodeData.topic,
-            status: 'initializing',
-            children: []
-        };
+        // Convert the node data to tree data format
+        const newNode = this._buildTreeDataFromNode(nodeData);
         
+        // Add node to tree data
+        if (!this.treeData.children) {
+            this.treeData.children = [];
+        }
         this.treeData.children.push(newNode);
         
         // Re-render tree

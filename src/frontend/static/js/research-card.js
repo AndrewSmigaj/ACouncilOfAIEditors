@@ -49,16 +49,16 @@ class ResearchCard {
             return;
         }
         
-        // Get results from research_results field
-        const results = researchData.research_results || {};
+        // Display the AI name if provided
+        const aiName = researchData.ai ? `<span class="badge bg-primary">${researchData.ai.toUpperCase()}</span> ` : '';
         
         this.container.innerHTML = `
             <div class="card">
                 <div class="card-header">
-                    <h3>${researchData.topic}</h3>
+                    <h3>${aiName}${researchData.topic}</h3>
                 </div>
                 <div class="card-body">
-                    ${this._renderResearchContent(results)}
+                    ${this._renderResearchContent(researchData)}
                 </div>
             </div>
         `;
@@ -155,9 +155,9 @@ class ResearchCard {
                         ${results.further_research.map(item => `
                             <div class="list-group-item">
                                 <h5>${item.topic}</h5>
-                                <p>${item.rationale}</p>
+                                <p>${item.reason || item.rationale}</p>
                                 <button class="btn btn-primary explore-further-btn" 
-                                        data-topic='${JSON.stringify(item)}'>
+                                        data-topic='${JSON.stringify({topic: item.topic})}'>
                                     Explore Further
                                 </button>
                             </div>
@@ -173,7 +173,7 @@ class ResearchCard {
                         ${results.references.map(ref => `
                             <li class="list-group-item">
                                 <h5>${ref.title}</h5>
-                                <p>${ref.source}</p>
+                                <p>${ref.source || ''}</p>
                                 ${ref.url ? `<a href="${ref.url}" target="_blank">View Source</a>` : ''}
                             </li>
                         `).join('')}
@@ -186,10 +186,10 @@ class ResearchCard {
                     <h4>Web Results</h4>
                     <div class="list-group">
                         ${results.web_results.map(result => `
-                            <a href="${result.link}" target="_blank" class="list-group-item list-group-item-action">
+                            <a href="${result.link || result.url}" target="_blank" class="list-group-item list-group-item-action">
                                 <h5>${result.title}</h5>
-                                <p>${result.snippet}</p>
-                                <small class="text-muted">Source: ${result.source}</small>
+                                <p>${result.snippet || ''}</p>
+                                <small class="text-muted">Source: ${result.source || 'Web'}</small>
                             </a>
                         `).join('')}
                     </div>

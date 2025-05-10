@@ -15,6 +15,7 @@ from .research_base import (
 )
 from .ai_council import AICouncil
 from src.database.mongodb import get_database
+from src.backend.models.research import Node
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -56,7 +57,17 @@ class ResearchService:
             logger.debug(f"Starting research for topic: {topic}")
             research_results = await self.council.conduct_research(topic)
             
-            # Create guide document
+            # Create root nodes for each enabled AI
+            root_nodes = {}
+            for ai_name, result in research_results["research_results"].items():
+                # Create a node for this AI's research
+                root_nodes[ai_name] = Node(
+                    topic=topic,
+                    status="completed",
+                    research=result  # Direct mapping from AI results
+                ).to_dict()
+            
+            # Create guide document with trees
             guide_doc = {
                 "topic": topic,
                 "status": "completed",
@@ -66,8 +77,7 @@ class ResearchService:
                     "ais": [name for name, config in self.council.members.items() if config["enabled"]],
                     "depth": await self._get_topic_depth(guide_id)
                 },
-                "research": research_results,
-                "children": []
+                "trees": root_nodes
             }
             
             # Store results
@@ -83,7 +93,10 @@ class ResearchService:
                 0
             )
             
-            return guide_doc
+            return {
+                "topic": topic,
+                "trees": root_nodes
+            }
             
         except Exception as e:
             logger.error(f"Research failed: {str(e)}")
@@ -96,22 +109,55 @@ class ResearchService:
             )
             raise ResearchError(f"Research failed: {str(e)}")
             
-    async def _get_topic_depth(self, guide_id: str) -> int:
-        """Get the depth of a topic in the research tree"""
-        if not guide_id:
+    async def research_subtopic(self, topic: str, ai: str, guide_id: str, parent_node_id: str) -> Dict[str, Any]:
+        """Conduct research for a subtopic with a specific AI"""
+        try:
+            # Enable only the specified AI
+            for member_name in self.council.members:
+                self.council.members[member_name]["enabled"] = (member_name == ai)
+            
+            # Run research with just this AI
+            logger.debug(f"Starting subtopic research for topic: {topic} with AI: {ai}")
+            research_results = await self.council.conduct_research(topic)
+            
+            # Get the result for this AI
+            ai_result = research_results["research_results"].get(ai, {})
+            logger.debug(f"Got research result for AI {ai}: {json.dumps(ai_result, default=str)}")
+            
+            # Create a node for this research
+            new_node = Node(
+                topic=topic,
+                status="completed",
+                research=ai_result
+            )
+            
+            return new_node.to_dict()
+            
+        except Exception as e:
+            logger.error(f"Subtopic research failed: {str(e)}")
+            await self.logging_service.log_interaction(
+                'research',
+                'error',
+                topic,
+                str(e),
+                0
+            )
+            raise ResearchError(f"Subtopic research failed: {str(e)}")
+    
+    async def _get_topic_depth(self, parent_id: Optional[str]) -> int:
+        """Get the depth of a topic based on its parent"""
+        if not parent_id:
             return 0
             
-        depth = 0
-        current_id = guide_id
-        
-        while current_id:
-            guide = await self.db_service.guide_collection.find_one({"_id": current_id})
-            if not guide or not guide.get("parent_id"):
-                break
-            current_id = guide["parent_id"]
-            depth += 1
-            
-        return depth
+        try:
+            guide = await self.db_service.get_guide(parent_id)
+            if not guide:
+                return 0
+                
+            return guide.get("metadata", {}).get("depth", 0) + 1
+        except Exception as e:
+            logger.error(f"Failed to get topic depth: {str(e)}")
+            return 0
 
 class GoogleSearchService(SearchService):
     """Google Search API implementation"""
@@ -196,8 +242,11 @@ class MongoDBService(DatabaseService):
                 logger.error(f"Guide not found: {guide_id}")
                 return None
                 
-            logger.debug(f"Found guide with research results: {guide.get('research_results')}")
-            return guide.get('research_results')
+            # Return the guide with trees structure
+            return {
+                "status": guide.get("status", "completed"),
+                "trees": guide.get("trees", {})
+            }
         except Exception as e:
             logger.error(f"Failed to get research results: {str(e)}", exc_info=True)
             raise DatabaseError(f"Failed to get research results: {str(e)}")
@@ -209,18 +258,22 @@ class MongoDBService(DatabaseService):
             logger.debug(f"Storing research for guide_id: {guide_id}")
             logger.debug(f"Research data: {json.dumps(research, default=str)}")
             
-            # Create guide document
+            # Create a clean guide document
             guide_doc = {
                 "topic": research["topic"],
-                "status": research.get("status", "completed"),  # Default to completed if not specified
+                "status": research.get("status", "completed"),
                 "metadata": research.get("metadata", {
                     "created": datetime.utcnow(),
                     "updated": datetime.utcnow()
                 }),
-                "research": research.get("research_results", {}),  # Use research_results if available
-                "children": research.get("children", []),
                 "updated_at": datetime.utcnow()
             }
+            
+            # Include trees directly
+            if "trees" in research:
+                guide_doc["trees"] = research["trees"]
+                logger.debug(f"Included trees structure: {json.dumps(guide_doc['trees'], default=str)}")
+            
             logger.debug(f"Created guide document: {json.dumps(guide_doc, default=str)}")
             
             # Use upsert for guide_id to ensure atomic updates
@@ -245,6 +298,64 @@ class MongoDBService(DatabaseService):
             logger.error(f"Failed to store research: {str(e)}", exc_info=True)
             logger.error(f"Research data that failed: {json.dumps(research, default=str)}")
             raise DatabaseError(f"Failed to store research: {str(e)}")
+            
+    async def add_subtopic_node(self, guide_id: str, ai: str, parent_node_id: str, new_node: Dict[str, Any]) -> bool:
+        """Add a subtopic node to a specific AI's research tree"""
+        try:
+            await self.initialize()
+            logger.debug(f"Adding subtopic node to guide {guide_id}, AI {ai}, parent {parent_node_id}")
+            
+            # Update the guide document to add the new node as a child of the specified parent
+            result = await self.guide_collection.update_one(
+                {"_id": ObjectId(guide_id), f"trees.{ai}.node_id": parent_node_id},
+                {"$push": {f"trees.{ai}.children": new_node}}
+            )
+            
+            if result.modified_count == 0:
+                # Try to find the parent node deeper in the tree
+                # This requires a more complex update using the aggregation pipeline
+                logger.debug("Parent node not found at root level, searching deeper in tree")
+                
+                # Get the current guide document
+                guide = await self.get_guide(guide_id)
+                if not guide or "trees" not in guide or ai not in guide["trees"]:
+                    return False
+                
+                # Manually traverse the tree to find the parent node
+                found = False
+                async def traverse_and_update(node, path):
+                    nonlocal found
+                    if found:
+                        return
+                        
+                    if node.get("node_id") == parent_node_id:
+                        # Found the parent node, update it
+                        if "children" not in node:
+                            node["children"] = []
+                        node["children"].append(new_node)
+                        
+                        # Update the entire tree in the database
+                        update_result = await self.guide_collection.update_one(
+                            {"_id": ObjectId(guide_id)},
+                            {"$set": {f"trees.{ai}": guide["trees"][ai]}}
+                        )
+                        found = update_result.modified_count > 0
+                        return
+                    
+                    # Recursively search children
+                    if "children" in node:
+                        for i, child in enumerate(node["children"]):
+                            await traverse_and_update(child, path + f".children.{i}")
+                
+                # Start traversal from the root node of this AI's tree
+                await traverse_and_update(guide["trees"][ai], f"trees.{ai}")
+                return found
+            
+            return result.modified_count > 0
+            
+        except Exception as e:
+            logger.error(f"Failed to add subtopic node: {str(e)}", exc_info=True)
+            raise DatabaseError(f"Failed to add subtopic node: {str(e)}")
             
     async def get_cached_research(self, topic: str) -> Optional[Dict[str, Any]]:
         """Retrieve cached research results"""
