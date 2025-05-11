@@ -5,17 +5,22 @@
 
 class ResearchCard {
     constructor(containerId) {
+        console.log(`[DEBUG ResearchCard] Creating new ResearchCard with container ID: ${containerId}`);
         this.containerId = containerId;
         this.container = document.getElementById(containerId);
         this.eventHandlers = new Map();
         
         if (!this.container) {
+            console.error(`[DEBUG ResearchCard] Container element #${containerId} not found!`);
             throw new Error(`Container element #${containerId} not found`);
         }
+        
+        console.log(`[DEBUG ResearchCard] ResearchCard initialized successfully`);
     }
     
     // Event handling
     on(event, handler) {
+        console.log(`[DEBUG ResearchCard] Adding handler for event: ${event}`);
         if (!this.eventHandlers.has(event)) {
             this.eventHandlers.set(event, new Set());
         }
@@ -23,20 +28,30 @@ class ResearchCard {
     }
     
     off(event, handler) {
+        console.log(`[DEBUG ResearchCard] Removing handler for event: ${event}`);
         if (this.eventHandlers.has(event)) {
             this.eventHandlers.get(event).delete(handler);
         }
     }
     
     _emit(event, data) {
+        console.log(`[DEBUG ResearchCard] Emitting event: ${event}`, data);
         const handlers = this.eventHandlers.get(event);
         if (handlers) {
-            handlers.forEach(handler => handler(data));
+            handlers.forEach(handler => {
+                console.log(`[DEBUG ResearchCard] Calling handler for event: ${event}`);
+                handler(data);
+            });
+        } else {
+            console.warn(`[DEBUG ResearchCard] No handlers registered for event: ${event}`);
         }
     }
     
     updateContent(researchData) {
+        console.log(`[DEBUG ResearchCard] Updating content with data:`, researchData);
+        
         if (!researchData) {
+            console.warn(`[DEBUG ResearchCard] No research data provided`);
             this.container.innerHTML = `
                 <div class="card">
                     <div class="card-body">
@@ -52,6 +67,7 @@ class ResearchCard {
         // Display the AI name if provided
         const aiName = researchData.ai ? `<span class="badge bg-primary">${researchData.ai.toUpperCase()}</span> ` : '';
         
+        console.log(`[DEBUG ResearchCard] Rendering content for topic: ${researchData.topic}`);
         this.container.innerHTML = `
             <div class="card">
                 <div class="card-header">
@@ -64,15 +80,37 @@ class ResearchCard {
         `;
         
         // Add event listeners to explore further buttons
-        this.container.querySelectorAll('.explore-further-btn').forEach(button => {
+        const exploreButtons = this.container.querySelectorAll('.explore-further-btn');
+        console.log(`[DEBUG ResearchCard] Found ${exploreButtons.length} explore further buttons`);
+        
+        exploreButtons.forEach((button, index) => {
+            console.log(`[DEBUG ResearchCard] Adding click listener to button ${index + 1}`);
+            
             button.addEventListener('click', (event) => {
-                const topic = JSON.parse(event.target.dataset.topic);
-                this._emit('researchRequested', topic);
+                console.log(`[DEBUG ResearchCard] Explore further button clicked:`, event.target);
+                
+                try {
+                    const topicData = JSON.parse(event.target.dataset.topic);
+                    console.log(`[DEBUG ResearchCard] Button has topic data:`, topicData);
+                    this._emit('researchRequested', topicData);
+                } catch (error) {
+                    console.error(`[DEBUG ResearchCard] Error parsing topic data:`, error);
+                    console.error(`[DEBUG ResearchCard] Raw topic data:`, event.target.dataset.topic);
+                }
             });
         });
+        
+        console.log(`[DEBUG ResearchCard] Content update complete`);
     }
     
     _renderResearchContent(results) {
+        console.log(`[DEBUG ResearchCard] Rendering research content sections`);
+        
+        // Log what sections are available in the data
+        console.log(`[DEBUG ResearchCard] Available sections:`, 
+            Object.keys(results).filter(key => 
+                Array.isArray(results[key]) ? results[key].length > 0 : results[key]));
+        
         return `
             ${results.summary ? `
                 <div class="summary-section mb-4">
@@ -152,16 +190,19 @@ class ResearchCard {
                 <div class="further-research-section mb-4">
                     <h4>Further Research</h4>
                     <div class="list-group">
-                        ${results.further_research.map(item => `
-                            <div class="list-group-item">
-                                <h5>${item.topic}</h5>
-                                <p>${item.reason || item.rationale}</p>
-                                <button class="btn btn-primary explore-further-btn" 
-                                        data-topic='${JSON.stringify({topic: item.topic})}'>
-                                    Explore Further
-                                </button>
-                            </div>
-                        `).join('')}
+                        ${results.further_research.map((item, index) => {
+                            console.log(`[DEBUG ResearchCard] Rendering further research item ${index}:`, item);
+                            return `
+                                <div class="list-group-item">
+                                    <h5>${item.topic}</h5>
+                                    <p>${item.reason || item.rationale}</p>
+                                    <button class="btn btn-primary explore-further-btn" 
+                                            data-topic='${JSON.stringify({topic: item.topic})}'>
+                                        Explore Further
+                                    </button>
+                                </div>
+                            `;
+                        }).join('')}
                     </div>
                 </div>
             ` : ''}
@@ -199,6 +240,7 @@ class ResearchCard {
     }
     
     showLoading() {
+        console.log(`[DEBUG ResearchCard] Showing loading state`);
         this.container.innerHTML = `
             <div class="card">
                 <div class="card-body">
@@ -214,6 +256,7 @@ class ResearchCard {
     }
     
     showError(message) {
+        console.error(`[DEBUG ResearchCard] Showing error: ${message}`);
         this.container.innerHTML = `
             <div class="card">
                 <div class="card-body">
@@ -225,6 +268,8 @@ class ResearchCard {
         `;
     }
 }
+
+console.log('[DEBUG] ResearchCard class defined');
 
 // Export for use in other modules
 window.ResearchCard = ResearchCard; 

@@ -303,23 +303,48 @@ class MongoDBService(DatabaseService):
         """Add a subtopic node to a specific AI's research tree"""
         try:
             await self.initialize()
-            logger.debug(f"Adding subtopic node to guide {guide_id}, AI {ai}, parent {parent_node_id}")
+            logger.debug(f"[DEBUG MongoDBService] Adding subtopic node to guide {guide_id}, AI {ai}, parent {parent_node_id}")
+            logger.debug(f"[DEBUG MongoDBService] New node data: {json.dumps(new_node, default=str)}")
             
             # Update the guide document to add the new node as a child of the specified parent
+            logger.debug(f"[DEBUG MongoDBService] Attempting direct update at root level")
+            
+            # Log the current structure
+            current_guide = await self.get_guide(guide_id)
+            if current_guide:
+                has_trees = "trees" in current_guide
+                has_ai = has_trees and ai in current_guide.get("trees", {})
+                logger.debug(f"[DEBUG MongoDBService] Current guide has trees: {has_trees}, has AI '{ai}': {has_ai}")
+                
+                if has_ai:
+                    root_node_id = current_guide["trees"][ai].get("node_id")
+                    logger.debug(f"[DEBUG MongoDBService] AI '{ai}' root node ID: {root_node_id}")
+                    logger.debug(f"[DEBUG MongoDBService] Looking for parent node ID: {parent_node_id}")
+                    
+                    # Check if the root node is the parent
+                    if root_node_id == parent_node_id:
+                        logger.debug(f"[DEBUG MongoDBService] Parent node is the root node")
+            
+            # First attempt: Try updating at root level
             result = await self.guide_collection.update_one(
                 {"_id": ObjectId(guide_id), f"trees.{ai}.node_id": parent_node_id},
                 {"$push": {f"trees.{ai}.children": new_node}}
             )
             
+            logger.debug(f"[DEBUG MongoDBService] Direct update result - matched: {result.matched_count}, modified: {result.modified_count}")
+            
             if result.modified_count == 0:
                 # Try to find the parent node deeper in the tree
                 # This requires a more complex update using the aggregation pipeline
-                logger.debug("Parent node not found at root level, searching deeper in tree")
+                logger.debug("[DEBUG MongoDBService] Parent node not found at root level, searching deeper in tree")
                 
                 # Get the current guide document
                 guide = await self.get_guide(guide_id)
                 if not guide or "trees" not in guide or ai not in guide["trees"]:
+                    logger.error(f"[DEBUG MongoDBService] Could not find guide, trees, or AI '{ai}' in guide")
                     return False
+                
+                logger.debug(f"[DEBUG MongoDBService] Retrieved guide document, has trees for AI '{ai}': {ai in guide.get('trees', {})}")
                 
                 # Manually traverse the tree to find the parent node
                 found = False
@@ -328,11 +353,18 @@ class MongoDBService(DatabaseService):
                     if found:
                         return
                         
+                    logger.debug(f"[DEBUG MongoDBService] Checking node: {node.get('node_id')} at path {path}")
+                        
                     if node.get("node_id") == parent_node_id:
                         # Found the parent node, update it
+                        logger.debug(f"[DEBUG MongoDBService] Found parent node at path {path}")
+                        
                         if "children" not in node:
+                            logger.debug(f"[DEBUG MongoDBService] Parent node has no children array, creating one")
                             node["children"] = []
+                            
                         node["children"].append(new_node)
+                        logger.debug(f"[DEBUG MongoDBService] Added new node to parent's children, new count: {len(node['children'])}")
                         
                         # Update the entire tree in the database
                         update_result = await self.guide_collection.update_one(
@@ -340,21 +372,33 @@ class MongoDBService(DatabaseService):
                             {"$set": {f"trees.{ai}": guide["trees"][ai]}}
                         )
                         found = update_result.modified_count > 0
+                        logger.debug(f"[DEBUG MongoDBService] Updated entire tree - matched: {update_result.matched_count}, modified: {update_result.modified_count}")
                         return
                     
                     # Recursively search children
                     if "children" in node:
+                        logger.debug(f"[DEBUG MongoDBService] Node has {len(node['children'])} children, searching recursively")
                         for i, child in enumerate(node["children"]):
                             await traverse_and_update(child, path + f".children.{i}")
+                    else:
+                        logger.debug(f"[DEBUG MongoDBService] Node has no children, skipping")
                 
                 # Start traversal from the root node of this AI's tree
+                logger.debug(f"[DEBUG MongoDBService] Starting recursive traversal from root node")
                 await traverse_and_update(guide["trees"][ai], f"trees.{ai}")
+                
+                if found:
+                    logger.debug(f"[DEBUG MongoDBService] Successfully added node via recursive traversal")
+                else:
+                    logger.error(f"[DEBUG MongoDBService] Could not find parent node {parent_node_id} in the tree for AI {ai}")
+                
                 return found
             
+            logger.debug(f"[DEBUG MongoDBService] Successfully added node at root level")
             return result.modified_count > 0
             
         except Exception as e:
-            logger.error(f"Failed to add subtopic node: {str(e)}", exc_info=True)
+            logger.error(f"[DEBUG MongoDBService] Failed to add subtopic node: {str(e)}", exc_info=True)
             raise DatabaseError(f"Failed to add subtopic node: {str(e)}")
             
     async def get_cached_research(self, topic: str) -> Optional[Dict[str, Any]]:

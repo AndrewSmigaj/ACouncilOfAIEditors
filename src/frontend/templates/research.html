@@ -45,22 +45,41 @@
 <script src="{{ url_for('static', filename='js/research-tree.js') }}"></script>
 <script src="{{ url_for('static', filename='js/research-card.js') }}"></script>
 <script>
+    console.log('[DEBUG research.html] Script starting');
+    
     document.addEventListener('DOMContentLoaded', function() {
+        console.log('[DEBUG research.html] DOM content loaded');
+        
         const container = document.querySelector('.research-container');
         if (container) {
             const guideId = container.dataset.guideId;
+            console.log(`[DEBUG research.html] Found research container with guide ID: ${guideId}`);
             
             // Fetch research data
+            console.log(`[DEBUG research.html] Fetching research data for guide ID: ${guideId}`);
             fetch(`/api/research/results/${guideId}`)
-                .then(response => response.json())
+                .then(response => {
+                    console.log(`[DEBUG research.html] Got response status: ${response.status}`);
+                    return response.json();
+                })
                 .then(data => {
+                    console.log('[DEBUG research.html] Parsed JSON data:', data);
+                    
                     if (data.status === 'error') {
+                        console.error('[DEBUG research.html] Error in data:', data.message);
                         throw new Error(data.message);
                     }
                     
                     if (data.trees) {
+                        console.log('[DEBUG research.html] Data contains trees:', Object.keys(data.trees));
+                        
+                        // Store tree instances to maintain state
+                        const treeInstances = {};
+                        
                         // Display trees for each AI
                         Object.entries(data.trees).forEach(([ai, root]) => {
+                            console.log(`[DEBUG research.html] Processing tree for AI: ${ai}`);
+                            
                             // Create a column for this AI's tree
                             const col = document.createElement('div');
                             col.className = 'col-md-4';
@@ -76,39 +95,62 @@
                             col.appendChild(treeDiv);
                             
                             document.getElementById('trees-row').appendChild(col);
+                            console.log(`[DEBUG research.html] Created tree container for AI: ${ai}`);
                             
-                            // Initialize the tree
+                            // Initialize the tree and store reference
                             const tree = new ResearchTree(`tree-${ai}`);
+                            treeInstances[ai] = tree; // Store reference for later use
                             tree.initializeWithData(root);
+                            console.log(`[DEBUG research.html] Initialized tree for AI: ${ai}`);
                             
                             // Handle node selection
                             tree.on('nodeSelected', node => {
+                                console.log(`[DEBUG research.html] Node selected in tree ${ai}:`, node);
+                                
                                 // Show the research card
                                 const card = new ResearchCard('research-card');
+                                console.log(`[DEBUG research.html] Created research card for node:`, node.topic);
+                                
                                 card.updateContent({
                                     ai: ai,
                                     topic: node.topic,
                                     ...node.research
                                 });
+                                console.log(`[DEBUG research.html] Updated card content for AI: ${ai}, topic: ${node.topic}`);
                                 
                                 // Set up the explore further button handler
                                 card.on('researchRequested', topic => {
+                                    console.log(`[DEBUG research.html] Research requested for topic:`, topic);
+                                    
+                                    // Log the full URL and request body being used
+                                    const requestUrl = `/api/research/${guideId}/subtopics`;
+                                    const requestBody = {
+                                        topic: topic.topic,
+                                        ai: ai,
+                                        parent_node_id: node.node_id
+                                    };
+                                    
+                                    console.log(`[DEBUG research.html] Making API call to: ${requestUrl}`);
+                                    console.log(`[DEBUG research.html] Request body:`, requestBody);
+                                    
                                     // Call the subtopic API to research this topic
-                                    fetch('/api/research/subtopic', {
+                                    fetch(requestUrl, {
                                         method: 'POST',
                                         headers: {
                                             'Content-Type': 'application/json'
                                         },
-                                        body: JSON.stringify({
-                                            topic: topic.topic,
-                                            ai: ai,
-                                            guide_id: guideId,
-                                            parent_node_id: node.node_id
-                                        })
+                                        body: JSON.stringify(requestBody)
                                     })
-                                    .then(response => response.json())
+                                    .then(response => {
+                                        console.log(`[DEBUG research.html] Subtopic API response status: ${response.status}`);
+                                        return response.json();
+                                    })
                                     .then(result => {
+                                        console.log(`[DEBUG research.html] Subtopic API result:`, result);
+                                        
                                         if (result.status === 'success') {
+                                            console.log(`[DEBUG research.html] Successfully researched subtopic, adding node:`, result.node);
+                                            
                                             // Add the new node to the tree
                                             tree.addNode(result.node);
                                             
@@ -118,13 +160,16 @@
                                                 topic: result.node.topic,
                                                 ...result.node.research
                                             });
+                                            
+                                            console.log(`[DEBUG research.html] Updated UI with new research`);
                                         } else {
-                                            alert('Error: ' + result.message);
+                                            console.error(`[DEBUG research.html] Error from API:`, result);
+                                            alert('Error: ' + (result.message || result.error || 'Unknown error'));
                                         }
                                     })
                                     .catch(error => {
-                                        console.error('Error:', error);
-                                        alert('Failed to research subtopic');
+                                        console.error('[DEBUG research.html] Error in fetch:', error);
+                                        alert('Failed to research subtopic: ' + error.message);
                                     });
                                 });
                             });
@@ -133,16 +178,78 @@
                         // Show the first AI's root node research by default
                         const firstAI = Object.keys(data.trees)[0];
                         const firstRoot = data.trees[firstAI];
+                        console.log(`[DEBUG research.html] Showing default research for AI: ${firstAI}`);
+                        
                         const card = new ResearchCard('research-card');
                         card.updateContent({
                             ai: firstAI,
                             topic: firstRoot.topic,
                             ...firstRoot.research
                         });
+                        
+                        // Add event handler for the default card's "Explore Further" buttons
+                        card.on('researchRequested', topic => {
+                            console.log(`[DEBUG research.html] Research requested for topic:`, topic);
+                            
+                            // Log the full URL and request body being used
+                            const requestUrl = `/api/research/${guideId}/subtopics`;
+                            const requestBody = {
+                                topic: topic.topic,
+                                ai: firstAI,
+                                parent_node_id: firstRoot.node_id
+                            };
+                            
+                            console.log(`[DEBUG research.html] Making API call to: ${requestUrl}`);
+                            console.log(`[DEBUG research.html] Request body:`, requestBody);
+                            
+                            // Call the subtopic API to research this topic
+                            fetch(requestUrl, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify(requestBody)
+                            })
+                            .then(response => {
+                                console.log(`[DEBUG research.html] Subtopic API response status: ${response.status}`);
+                                return response.json();
+                            })
+                            .then(result => {
+                                console.log(`[DEBUG research.html] Subtopic API result:`, result);
+                                
+                                if (result.status === 'success') {
+                                    console.log(`[DEBUG research.html] Successfully researched subtopic, adding node:`, result.node);
+                                    
+                                    // Use the stored tree instance
+                                    const tree = treeInstances[firstAI];
+                                    
+                                    // Add the new node to the tree
+                                    tree.addNode(result.node);
+                                    
+                                    // Show the new node's research
+                                    card.updateContent({
+                                        ai: firstAI,
+                                        topic: result.node.topic,
+                                        ...result.node.research
+                                    });
+                                    
+                                    console.log(`[DEBUG research.html] Updated UI with new research`);
+                                } else {
+                                    console.error(`[DEBUG research.html] Error from API:`, result);
+                                    alert('Error: ' + (result.message || result.error || 'Unknown error'));
+                                }
+                            })
+                            .catch(error => {
+                                console.error('[DEBUG research.html] Error in fetch:', error);
+                                alert('Failed to research subtopic: ' + error.message);
+                            });
+                        });
+                    } else {
+                        console.warn('[DEBUG research.html] No trees found in data');
                     }
                 })
                 .catch(error => {
-                    console.error('Error loading research data:', error);
+                    console.error('[DEBUG research.html] Error loading research data:', error);
                     document.getElementById('research-card').innerHTML = `
                         <div class="card">
                             <div class="card-body">
@@ -153,6 +260,8 @@
                         </div>
                     `;
                 });
+        } else {
+            console.warn('[DEBUG research.html] No research container found');
         }
     });
 </script>

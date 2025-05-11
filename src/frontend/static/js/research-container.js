@@ -212,15 +212,15 @@ class ResearchContainer {
     async _handleResearchRequest(topic) {
         try {
             // Start research
-            const response = await fetch('/api/research/subtopic', {
+            const response = await fetch(`/api/research/${this.guideId}/subtopics`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
                     topic: topic.topic,
-                    parent_topic: this.currentNode,
-                    guide_id: this.guideId
+                    ai: topic.ai || 'grok', // Default to grok if AI not specified
+                    parent_node_id: this.currentNode
                 })
             });
             

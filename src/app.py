@@ -182,19 +182,30 @@ def create_app():
     @app.route("/api/research/<guide_id>/subtopics", methods=["POST"])
     async def research_subtopic_api(guide_id: str):
         try:
+            logger.debug(f"[DEBUG] Subtopic API request received for guide_id: {guide_id}")
             data = await request.get_json()
+            logger.debug(f"[DEBUG] Request data: {data}")
+            
             if not data or "topic" not in data:
-                return jsonify({"error": "Topic is required"}), 400
+                logger.error(f"[DEBUG] Missing required field 'topic' in request data: {data}")
+                return jsonify({"error": "Topic is required", "status": "error"}), 400
                 
             if "ai" not in data:
-                return jsonify({"error": "AI identifier is required"}), 400
+                logger.error(f"[DEBUG] Missing required field 'ai' in request data: {data}")
+                return jsonify({"error": "AI identifier is required", "status": "error"}), 400
                 
             if "parent_node_id" not in data:
-                return jsonify({"error": "Parent node ID is required"}), 400
+                logger.error(f"[DEBUG] Missing required field 'parent_node_id' in request data: {data}")
+                return jsonify({"error": "Parent node ID is required", "status": "error"}), 400
+            
+            logger.debug(f"[DEBUG] All required fields present: topic={data['topic']}, ai={data['ai']}, parent_node_id={data['parent_node_id']}")
                 
             guide = await db_service.get_guide(guide_id)
             if not guide:
-                return jsonify({"error": "Guide not found"}), 404
+                logger.error(f"[DEBUG] Guide not found: {guide_id}")
+                return jsonify({"error": "Guide not found", "status": "error"}), 404
+                
+            logger.debug(f"[DEBUG] Found guide: {guide_id}, topic: {guide.get('topic', 'unknown')}")
                 
             # Create a new research session for the subtopic
             subtopic_session_id = await db_service.store_research({
@@ -204,19 +215,29 @@ def create_app():
                 "metadata": {"created": datetime.utcnow(), "updated": datetime.utcnow()},
                 "trees": {}
             })
+            logger.debug(f"[DEBUG] Created new research session for subtopic: {subtopic_session_id}")
             
             # Enable only the specified AI for research
+            logger.debug(f"[DEBUG] Available AI members: {list(council.members.keys())}")
             for member_name in council.members:
-                council.members[member_name]["enabled"] = (member_name == data["ai"])
+                enabled = (member_name == data["ai"])
+                council.members[member_name]["enabled"] = enabled
+                logger.debug(f"[DEBUG] AI {member_name} enabled: {enabled}")
                 
             # Conduct research
+            logger.debug(f"[DEBUG] Starting research for topic: {data['topic']}")
             research_results_obj = await council.conduct_research(data["topic"], session_id=subtopic_session_id)
+            logger.debug(f"[DEBUG] Research completed for subtopic session: {subtopic_session_id}")
             
             # Store research results
+            logger.debug(f"[DEBUG] Storing research results")
             await db_service.store_research(research_results_obj.to_dict() if hasattr(research_results_obj, 'to_dict') else research_results_obj, subtopic_session_id)
+            logger.debug(f"[DEBUG] Research results stored successfully")
             
             # Create node with generated results
             ai_results = research_results_obj.get("trees", {}).get(data["ai"], {})
+            logger.debug(f"[DEBUG] Retrieved AI results for {data['ai']}")
+            
             new_node = {
                 "node_id": subtopic_session_id,
                 "topic": data["topic"],
@@ -224,16 +245,20 @@ def create_app():
                 "research": ai_results.get("research", {}),
                 "children": []
             }
+            logger.debug(f"[DEBUG] Created new node: {new_node}")
             
             # Add node to parent's children
-            await db_service.add_subtopic_node(guide_id, data["ai"], data["parent_node_id"], new_node)
+            logger.debug(f"[DEBUG] Adding subtopic node to guide {guide_id}, AI {data['ai']}, parent node {data['parent_node_id']}")
+            result = await db_service.add_subtopic_node(guide_id, data["ai"], data["parent_node_id"], new_node)
+            logger.debug(f"[DEBUG] Add subtopic node result: {result}")
             
+            logger.debug(f"[DEBUG] Returning successful response with new node")
             return jsonify({
                 "status": "success", 
                 "node": new_node
             })
         except Exception as e:
-            logger.error(f"Error researching subtopic: {str(e)}", exc_info=True)
+            logger.error(f"[DEBUG] Error researching subtopic: {str(e)}", exc_info=True)
             return jsonify({"error": str(e), "status": "error"}), 500
 
     print("[DEBUG app.py] create_app finished.")

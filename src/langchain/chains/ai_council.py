@@ -165,51 +165,81 @@ class AICouncil:
         
     async def conduct_research(self, topic: str, session_id: Optional[str] = None, parent_id: Optional[str] = None) -> Dict[str, Any]:
         """Conduct research with all enabled members"""
+        logger.debug(f"[DEBUG AICouncil] Starting conduct_research for topic: {topic}")
+        logger.debug(f"[DEBUG AICouncil] Session ID: {session_id}, Parent ID: {parent_id}")
+        
         tasks = []
+        enabled_members = []
         
         # Add tasks for all enabled members
         for member_name, member_config in self.members.items():
             if member_config["enabled"]:
+                logger.debug(f"[DEBUG AICouncil] Adding research task for enabled member: {member_name}")
+                enabled_members.append(member_name)
                 member = AICouncilMember(member_name, member_config["config"])
                 tasks.append(member.research(topic))
+            else:
+                logger.debug(f"[DEBUG AICouncil] Member {member_name} is disabled, skipping")
                     
         # Run all research in parallel
+        logger.debug(f"[DEBUG AICouncil] Starting parallel research with {len(tasks)} tasks")
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        logger.debug(f"[DEBUG AICouncil] Gathered {len(results)} results")
         
         # Process results and create trees structure
         trees = {}
         
-        for member_name, member_config in self.members.items():
-            if member_config["enabled"]:
-                result = results.pop(0)
-                if isinstance(result, Exception):
-                    logger.error(f"{member_name} research failed: {str(result)}")
-                    trees[member_name] = {
-                        "topic": topic,
-                        "status": "completed",
-                        "research": {
-                            "summary": "",
-                            "key_points": [],
-                            "entities": [],
-                            "timeline": [],
-                            "further_research": [],
-                            "references": []
-                        }
-                    }
-                else:
-                    trees[member_name] = {
-                        "topic": topic,
-                        "status": "completed",
-                        "research": result["result"]
-                    }
+        for i, member_name in enumerate(enabled_members):
+            result = results[i]
+            logger.debug(f"[DEBUG AICouncil] Processing result for {member_name}")
+            
+            if isinstance(result, Exception):
+                logger.error(f"[DEBUG AICouncil] {member_name} research failed: {str(result)}")
+                trees[member_name] = {
+                    "node_id": session_id,  # Important to include node_id for tree structure
+                    "topic": topic,
+                    "status": "completed",
+                    "research": {
+                        "summary": "",
+                        "key_points": [],
+                        "entities": [],
+                        "timeline": [],
+                        "further_research": [],
+                        "references": []
+                    },
+                    "children": []  # Important to include children array
+                }
+            else:
+                logger.debug(f"[DEBUG AICouncil] {member_name} research succeeded")
+                # Log some stats about the result
+                if isinstance(result, dict) and "result" in result:
+                    further_research_count = len(result["result"].get("further_research", []))
+                    logger.debug(f"[DEBUG AICouncil] {member_name} found {further_research_count} further research topics")
                     
-        return {
+                    if further_research_count > 0:
+                        topics = [item.get("topic", "Unknown") for item in result["result"].get("further_research", [])]
+                        logger.debug(f"[DEBUG AICouncil] Further research topics: {topics}")
+                
+                trees[member_name] = {
+                    "node_id": session_id,  # Important to include node_id for tree structure
+                    "topic": topic,
+                    "status": "completed",
+                    "research": result["result"],
+                    "children": []  # Important to include children array
+                }
+            
+        logger.debug(f"[DEBUG AICouncil] Created trees structure with {len(trees)} AIs")
+                    
+        result_obj = {
             "topic": topic,
             "session_id": session_id,
             "parent_id": parent_id,
             "trees": trees,
             "timestamp": datetime.utcnow()
         }
+        
+        logger.debug(f"[DEBUG AICouncil] Research complete for topic: {topic}")
+        return result_obj
         
     def enable_member(self, member_name: str):
         """Enable a council member"""
